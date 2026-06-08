@@ -30,8 +30,6 @@ Codex Desktop local history repair tool.
 - Upgraded the Windows watcher to a diagnostic-first smart auto-repair model
   with file-change fingerprints, debounce, and cooldown instead of high-frequency
   shared-chat polling.
-- Updated the Windows installer to always show the install directory page and
-  stop silently reusing the previous install path.
 - Added Windows smoke tests for backend, watcher, scheduler, packaged app, and
   installer flows.
 
