@@ -1,5 +1,5 @@
 #define MyAppName "Codex History Sync Tool"
-#define MyAppVersion "0.3.1-launcher-compatible"
+#define MyAppVersion "0.3.2-smart-visibility"
 #define MyAppPublisher "Codex History Sync Tool Contributors"
 #define MyAppExeName "CodexHistorySyncTool.exe"
 #define MyAppCliExeName "CodexHistorySyncToolCli.exe"

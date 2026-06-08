@@ -15,10 +15,13 @@ history, credentials, tokens, API keys, or provider databases.
 - Synchronizes local thread provider/model metadata to the currently active
   Codex configuration.
 - Rebuilds the local session index used by the Codex sidebar.
+- Repairs additional local visibility flags, including missing user-message
+  markers, Windows long-path `\\?\` cwd prefixes, archived session metadata,
+  and archived rows only when they also match a local visibility anomaly.
 - Repairs project roots shown in the Codex sidebar.
 - Filters transient Codex work directories such as dated temporary workspaces
   so they are not promoted into permanent sidebar projects.
-- Provides a Windows desktop launcher and optional Windows auto-sync watcher.
+- Provides a Windows desktop launcher and optional smart auto-repair watcher.
 - Provides an Inno Setup installer build flow.
 
 ## Typical Use Cases
@@ -47,6 +50,12 @@ Every write path is designed around local safety:
   databases are never copied by the one-click repair flow.
 - Project repair keeps durable project roots and drops transient dated Codex
   workspaces from sidebar project lists.
+- Smart auto repair is diagnostic-first: it watches for Codex startup and local
+  file changes, debounces noisy changes, checks whether repair is needed, and
+  only writes when pending work exists.
+
+This tool does not implement high-frequency shared-chat polling. It does not
+copy chats between `.codex` and `.codex-official`.
 
 Even with those safeguards, review your Codex home before using any repair tool
 against important local data.
@@ -70,6 +79,10 @@ Sync local history to the active provider:
 ```powershell
 py -3 .\sync_backend.py --json sync
 ```
+
+The sync command also repairs common local visibility conditions when the
+corresponding columns exist in the Codex database. It does not unarchive normal
+user-archived threads unless another visibility anomaly is present.
 
 Repair project roots:
 
@@ -120,7 +133,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\windows_installer_
 - `sync_backend.py`: backend sync, backup, restore, and repair logic.
 - `launch_ui_windows.py`: Windows GUI launcher.
 - `windows_app.py`: Windows app entry point for packaged builds.
-- `scripts/windows_auto_sync_watcher.py`: optional Windows auto-sync watcher.
+- `scripts/windows_auto_sync_watcher.py`: optional smart auto-repair watcher.
 - `scripts/windows_task_scheduler.py`: Windows Task Scheduler integration.
 - `installer/CodexHistorySyncTool.iss`: Inno Setup installer script.
 - `docs/windows-upstream-sync-strategy.md`: maintenance strategy for tracking
@@ -136,6 +149,7 @@ these out of public repositories:
 - `state_5.sqlite`
 - `session_index.jsonl`
 - `sessions`
+- `archived_sessions`
 - `auth.json`
 - `config.toml`
 - `history_sync_backups`
