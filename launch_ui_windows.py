@@ -1,23 +1,25 @@
 from __future__ import annotations
 
 import os
+import subprocess
 import threading
 import tkinter as tk
 from pathlib import Path
 from tkinter import messagebox, simpledialog, ttk
 
 import sync_backend
-from scripts import windows_task_scheduler
+from scripts import windows_autosync_settings, windows_task_scheduler
 
 
 class WindowsSyncApp(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
         self.title("Codex 历史同步工具")
-        self.geometry("1120x760")
-        self.minsize(1040, 700)
+        self.geometry("980x680")
+        self.minsize(760, 560)
         self.latest_status: dict | None = None
         self.backup_rows: list[dict] = []
+        self.provider_restart_prompted = False
 
         self.provider_var = tk.StringVar(value="未刷新")
         self.login_var = tk.StringVar(value="未刷新")
@@ -34,225 +36,269 @@ class WindowsSyncApp(tk.Tk):
         )
         self.autosync_method_var = tk.StringVar(value="启用方式：未读取")
         self.autosync_next_var = tk.StringVar(value="生效时机：未读取")
+        self.recommendation_title_var = tk.StringVar(value="先刷新状态")
+        self.recommendation_detail_var = tk.StringVar(value="工具会读取当前 Codex 历史、项目和后台同步状态，然后给出下一步建议。")
+        self.backup_summary_var = tk.StringVar(value="备份：未刷新")
+        self.auto_detect_var = tk.BooleanVar(value=True)
+        self.auto_fix_chats_var = tk.BooleanVar(value=True)
+        self.auto_fix_projects_var = tk.BooleanVar(value=False)
+        self.dual_home_var = tk.BooleanVar(value=True)
+        self.detect_only_var = tk.BooleanVar(value=False)
 
+        self.load_autosync_settings()
         self._build_ui()
         self.refresh_state_async()
 
+    def load_autosync_settings(self) -> None:
+        settings = windows_autosync_settings.load_settings()
+        self.auto_detect_var.set(settings["auto_detect"])
+        self.auto_fix_chats_var.set(settings["auto_fix_chats"])
+        self.auto_fix_projects_var.set(settings["auto_fix_projects"])
+        self.dual_home_var.set(settings["dual_home"])
+        self.detect_only_var.set(settings["detect_only"])
+
+    def current_autosync_settings(self) -> dict[str, bool]:
+        return {
+            "auto_detect": bool(self.auto_detect_var.get()),
+            "auto_fix_chats": bool(self.auto_fix_chats_var.get()),
+            "auto_fix_projects": bool(self.auto_fix_projects_var.get()),
+            "dual_home": bool(self.dual_home_var.get()),
+            "detect_only": bool(self.detect_only_var.get()),
+        }
+
     def _build_ui(self) -> None:
-        self.configure(background="#f4f6f8")
+        self.configure(background="#eef2f5")
         style = ttk.Style(self)
-        style.configure("Title.TLabel", font=("Microsoft YaHei UI", 18, "bold"), background="#f4f6f8")
-        style.configure("Hint.TLabel", font=("Microsoft YaHei UI", 10), background="#f4f6f8", foreground="#8a4b22")
-        style.configure("Card.TLabelframe", padding=10)
-        style.configure("Card.TLabelframe.Label", font=("Microsoft YaHei UI", 10, "bold"))
-        style.configure("StatusValue.TLabel", font=("Microsoft YaHei UI", 12, "bold"))
-        style.configure("StatusSubtle.TLabel", font=("Microsoft YaHei UI", 9), foreground="#5f6b7a")
+        style.configure("TFrame", background="#eef2f5")
+        style.configure("Panel.TFrame", background="#ffffff", relief=tk.FLAT)
+        style.configure("Title.TLabel", font=("Microsoft YaHei UI", 18, "bold"), background="#eef2f5", foreground="#17202a")
+        style.configure("Subtitle.TLabel", font=("Microsoft YaHei UI", 10), background="#eef2f5", foreground="#667085")
+        style.configure("Hint.TLabel", font=("Microsoft YaHei UI", 10), background="#ffffff", foreground="#667085")
+        style.configure("Card.TLabelframe", padding=12, background="#ffffff")
+        style.configure("Card.TLabelframe.Label", font=("Microsoft YaHei UI", 10, "bold"), foreground="#344054")
+        style.configure("StatusValue.TLabel", font=("Microsoft YaHei UI", 13, "bold"), background="#ffffff", foreground="#101828")
+        style.configure("StatusSubtle.TLabel", font=("Microsoft YaHei UI", 9), background="#ffffff", foreground="#667085")
+        style.configure("Section.TLabel", font=("Microsoft YaHei UI", 12, "bold"), background="#eef2f5", foreground="#101828")
+        style.configure("PanelTitle.TLabel", font=("Microsoft YaHei UI", 12, "bold"), background="#ffffff", foreground="#101828")
+        style.configure("PanelText.TLabel", font=("Microsoft YaHei UI", 10), background="#ffffff", foreground="#475467")
         style.configure("Primary.TButton", padding=(12, 6))
-        style.configure("Guide.TLabelframe", padding=10)
+        style.configure("Quiet.TButton", padding=(10, 5))
+        style.configure("TCheckbutton", background="#ffffff", foreground="#344054")
+        style.configure("TNotebook", background="#eef2f5", borderwidth=0)
+        style.configure("TNotebook.Tab", padding=(14, 8))
 
         root = ttk.Frame(self, padding=18)
         root.pack(fill=tk.BOTH, expand=True)
         root.columnconfigure(0, weight=1)
-        root.rowconfigure(3, weight=1)
+        root.rowconfigure(2, weight=1)
 
         ttk.Label(root, text="Codex 历史同步工具", style="Title.TLabel").grid(row=0, column=0, sticky=tk.W)
         ttk.Label(
             root,
-            text="给第一次使用的人看的历史同步、备份恢复、项目列表修复工具。默认不迁移登录凭据、Token、API key 或 CC Switch 数据库。",
-            style="Hint.TLabel",
+            text="多登录方式、多 provider、多电脑迁移的历史同步与项目修复。默认不迁移登录凭据、Token、API key 或 CC Switch 数据库。",
+            style="Subtitle.TLabel",
         ).grid(row=1, column=0, sticky=tk.W, pady=(6, 14))
 
-        self._build_status_cards(root).grid(row=2, column=0, sticky=tk.EW, pady=(0, 12))
-
         notebook = ttk.Notebook(root)
-        notebook.grid(row=3, column=0, sticky=tk.NSEW)
-        notebook.add(self._build_guide_tab(notebook), text="新手向导")
-        notebook.add(self._build_actions_tab(notebook), text="同步与修复")
-        notebook.add(self._build_backups_tab(notebook), text="备份管理")
-        notebook.add(self._build_diagnostics_tab(notebook), text="诊断日志")
+        notebook.grid(row=2, column=0, sticky=tk.NSEW)
+        notebook.add(self._build_dashboard_tab(notebook), text="首页")
+        notebook.add(self._build_backups_tab(notebook), text="备份")
+        notebook.add(self._build_settings_tab(notebook), text="自动同步")
+        notebook.add(self._build_diagnostics_tab(notebook), text="日志")
 
     def _build_status_cards(self, parent: ttk.Frame) -> ttk.Frame:
         frame = ttk.Frame(parent)
-        for index in range(4):
+        for index in range(3):
             frame.columnconfigure(index, weight=1, uniform="cards")
 
         cards = [
-            ("当前账号/通道", self.provider_var),
+            ("账号/通道", self.provider_var),
             ("登录方式", self.login_var),
-            ("当前模型", self.model_var),
-            ("历史与项目", self.history_var),
+            ("历史", self.history_var),
         ]
         for index, (title, variable) in enumerate(cards):
             card = ttk.LabelFrame(frame, text=title, style="Card.TLabelframe")
-            card.grid(row=0, column=index, sticky=tk.EW, padx=(0 if index == 0 else 8, 0))
-            ttk.Label(card, textvariable=variable, wraplength=230, justify=tk.LEFT).pack(anchor=tk.W)
+            card.grid(row=0, column=index, sticky=tk.EW, padx=(0 if index == 0 else 10, 0), pady=(0, 10))
+            ttk.Label(card, textvariable=variable, style="StatusValue.TLabel", wraplength=250, justify=tk.LEFT).pack(anchor=tk.W)
 
         project_card = ttk.LabelFrame(frame, text="项目状态", style="Card.TLabelframe")
-        project_card.grid(row=1, column=0, columnspan=2, sticky=tk.EW, pady=(8, 0), padx=(0, 8))
-        ttk.Label(project_card, textvariable=self.project_var, wraplength=520, justify=tk.LEFT).pack(anchor=tk.W)
+        project_card.grid(row=1, column=0, sticky=tk.EW, padx=(0, 10))
+        ttk.Label(project_card, textvariable=self.project_var, style="StatusValue.TLabel", wraplength=270, justify=tk.LEFT).pack(anchor=tk.W)
 
         autosync_card = ttk.LabelFrame(frame, text="后台自动同步", style="Card.TLabelframe")
-        autosync_card.grid(row=1, column=2, sticky=tk.EW, pady=(8, 0), padx=(0, 8))
+        autosync_card.grid(row=1, column=1, sticky=tk.EW, padx=(0, 10))
         ttk.Label(autosync_card, textvariable=self.autosync_headline_var, style="StatusValue.TLabel").pack(anchor=tk.W)
         ttk.Label(
             autosync_card,
             textvariable=self.autosync_detail_var,
             style="StatusSubtle.TLabel",
-            wraplength=250,
+            wraplength=270,
             justify=tk.LEFT,
         ).pack(anchor=tk.W, pady=(4, 0))
 
-        safety_card = ttk.LabelFrame(frame, text="安全提醒", style="Card.TLabelframe")
-        safety_card.grid(row=1, column=3, sticky=tk.EW, pady=(8, 0))
-        ttk.Label(safety_card, textvariable=self.safety_var, wraplength=250, justify=tk.LEFT).pack(anchor=tk.W)
+        backup_card = ttk.LabelFrame(frame, text="备份", style="Card.TLabelframe")
+        backup_card.grid(row=1, column=2, sticky=tk.EW)
+        ttk.Label(backup_card, textvariable=self.backup_summary_var, style="StatusValue.TLabel", wraplength=270, justify=tk.LEFT).pack(anchor=tk.W)
         return frame
 
-    def _build_guide_tab(self, parent: ttk.Notebook) -> ttk.Frame:
-        tab = ttk.Frame(parent, padding=14)
-        tab.columnconfigure(0, weight=1)
-        tab.columnconfigure(1, weight=1)
+    def _scrollable_tab(self, parent: ttk.Notebook) -> tuple[ttk.Frame, ttk.Frame]:
+        outer = ttk.Frame(parent)
+        outer.rowconfigure(0, weight=1)
+        outer.columnconfigure(0, weight=1)
+        canvas = tk.Canvas(outer, highlightthickness=0, background="#eef2f5")
+        scrollbar = ttk.Scrollbar(outer, orient=tk.VERTICAL, command=canvas.yview)
+        content = ttk.Frame(canvas, padding=14)
+        window_id = canvas.create_window((0, 0), window=content, anchor=tk.NW)
+        canvas.configure(yscrollcommand=scrollbar.set)
+        canvas.grid(row=0, column=0, sticky=tk.NSEW)
+        scrollbar.grid(row=0, column=1, sticky=tk.NS)
+        content.bind("<Configure>", lambda event: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.bind("<Configure>", lambda event: canvas.itemconfigure(window_id, width=event.width))
+        return outer, content
 
-        guides = [
-            (
-                "第一次使用：先保命，再整理",
-                [
-                    "1. 先点“刷新状态”，确认工具读到了当前账号/通道、历史数量和项目数量。",
-                    "2. 点“手动备份当前状态”。这个备份只是保存历史和项目登记，不会保存登录密码或 token。",
-                    "3. 如果你只是切换过 Official、API key、CC Switch 后历史少了，再点“同步历史到当前账号/通道”。",
-                    "4. 同步后重新打开 Codex Desktop，看历史是否恢复。",
-                ],
-            ),
-            (
-                "换电脑恢复：先登录，再恢复",
-                [
-                    "1. 旧电脑先点“手动备份当前状态”，再打开备份目录，把最新备份文件夹带到新电脑。",
-                    "2. 新电脑先正常安装并登录 Codex Desktop，登录方式可以是 OpenAI 官方、ChatGPT OAuth、API key、自定义通道或 CC Switch。",
-                    "3. 新电脑打开本工具，先点“刷新状态”，再在备份管理里选中旧电脑备份并恢复。",
-                    "4. 默认不会迁移 auth.json、OAuth token、API key、refresh token 或 CC Switch 数据库。",
-                ],
-            ),
-            (
-                "项目少了、重复、项目里暂无对话",
-                [
-                    "1. 先完全退出 Codex Desktop，避免它把旧状态写回来。",
-                    "2. 点“项目诊断”，看是否有重复项目、项目数量异常或项目没有匹配到历史。",
-                    "3. 点“只修项目列表”。它只修项目登记，不会改你的登录凭据。",
-                    "4. 重新打开 Codex Desktop，再看项目列表和项目里的历史。",
-                ],
-            ),
-            (
-                "什么时候点哪个按钮",
-                [
-                    "刷新状态：不确定当前情况时先点它。",
-                    "手动备份当前状态：做任何恢复、同步、修复前都建议先点。",
-                    "同步历史到当前账号/通道：历史还在，但切换登录方式后看不到时使用。",
-                    "恢复选中备份：换电脑、误操作后回到某个备份点时使用。",
-                    "只修项目列表：项目少了、重复、项目里暂无对话时使用。",
-                    "自动同步：确认手动同步稳定后，再考虑开启。",
-                ],
-            ),
-        ]
+    def _build_dashboard_tab(self, parent: ttk.Notebook) -> ttk.Frame:
+        tab, content = self._scrollable_tab(parent)
+        content.columnconfigure(0, weight=2)
+        content.columnconfigure(1, weight=1)
 
-        for index, (title, lines) in enumerate(guides):
-            box = ttk.LabelFrame(tab, text=title, style="Guide.TLabelframe")
-            box.grid(row=index // 2, column=index % 2, sticky=tk.NSEW, padx=(0, 12), pady=(0, 12))
-            text = "\n".join(lines)
-            ttk.Label(box, text=text, wraplength=480, justify=tk.LEFT).pack(anchor=tk.W)
+        self._build_status_cards(content).grid(row=0, column=0, columnspan=2, sticky=tk.EW, pady=(0, 14))
 
-        quick = ttk.Frame(tab)
-        quick.grid(row=2, column=0, columnspan=2, sticky=tk.W, pady=(4, 0))
-        ttk.Button(quick, text="刷新状态", command=self.refresh_state_async, style="Primary.TButton").pack(side=tk.LEFT, padx=(0, 8))
-        ttk.Button(quick, text="一键安全备份并修复", command=self.one_click_safe_sync_async, style="Primary.TButton").pack(
-            side=tk.LEFT,
-            padx=(0, 8),
+        recommend = ttk.LabelFrame(content, text="建议下一步", style="Card.TLabelframe")
+        recommend.grid(row=1, column=0, sticky=tk.NSEW, padx=(0, 12), pady=(0, 12))
+        ttk.Label(recommend, textvariable=self.recommendation_title_var, style="PanelTitle.TLabel").pack(anchor=tk.W)
+        ttk.Label(
+            recommend,
+            textvariable=self.recommendation_detail_var,
+            style="PanelText.TLabel",
+            wraplength=560,
+            justify=tk.LEFT,
+        ).pack(anchor=tk.W, pady=(6, 12))
+        main_actions = ttk.Frame(recommend, style="Panel.TFrame")
+        main_actions.pack(anchor=tk.W, fill=tk.X)
+        main_actions.columnconfigure(0, weight=1)
+        main_actions.columnconfigure(1, weight=1)
+        ttk.Button(main_actions, text="一键安全备份并修复", command=self.one_click_safe_sync_async, style="Primary.TButton").grid(
+            row=0,
+            column=0,
+            columnspan=2,
+            sticky=tk.EW,
+            pady=(0, 8),
         )
-        ttk.Button(quick, text="手动备份当前状态", command=self.backup_async, style="Primary.TButton").pack(side=tk.LEFT, padx=(0, 8))
-        ttk.Button(quick, text="打开备份目录", command=self.open_backups).pack(side=tk.LEFT)
+        ttk.Button(main_actions, text="只同步历史", command=self.sync_async).grid(row=1, column=0, sticky=tk.EW, padx=(0, 8))
+        ttk.Button(main_actions, text="只修项目列表", command=self.project_repair_async).grid(row=1, column=1, sticky=tk.EW)
+
+        quick = ttk.LabelFrame(content, text="常用操作", style="Card.TLabelframe")
+        quick.grid(row=1, column=1, sticky=tk.NSEW, pady=(0, 12))
+        for text, command, primary in [
+            ("刷新状态", self.refresh_state_async, True),
+            ("手动备份", self.backup_async, False),
+            ("项目诊断", self.project_diagnose_async, False),
+            ("打开备份目录", self.open_backups, False),
+        ]:
+            ttk.Button(
+                quick,
+                text=text,
+                command=command,
+                style="Primary.TButton" if primary else "Quiet.TButton",
+            ).pack(anchor=tk.W, fill=tk.X, pady=(0, 8))
+
+        safety = ttk.LabelFrame(content, text="安全边界", style="Card.TLabelframe")
+        safety.grid(row=2, column=0, sticky=tk.EW, padx=(0, 12))
+        ttk.Label(
+            safety,
+            text="本工具只整理历史、项目登记和 provider metadata；默认不复制 auth.json、OAuth token、API key、refresh token、CC Switch 数据库。",
+            style="PanelText.TLabel",
+            wraplength=560,
+            justify=tk.LEFT,
+        ).pack(anchor=tk.W)
+        ttk.Button(safety, text="查看新手教程", command=self.show_beginner_help).pack(anchor=tk.W, pady=(10, 0))
+
+        autosync = ttk.LabelFrame(content, text="自动同步状态", style="Card.TLabelframe")
+        autosync.grid(row=2, column=1, sticky=tk.EW)
+        ttk.Label(autosync, textvariable=self.autosync_status_var, style="PanelTitle.TLabel", wraplength=280).pack(anchor=tk.W)
+        ttk.Label(autosync, textvariable=self.autosync_next_var, style="PanelText.TLabel", wraplength=280, justify=tk.LEFT).pack(anchor=tk.W, pady=(6, 10))
+        ttk.Button(autosync, text="管理自动同步", command=lambda: self.notebook_select_by_text(parent, "自动同步")).pack(anchor=tk.W)
         return tab
 
-    def _build_actions_tab(self, parent: ttk.Notebook) -> ttk.Frame:
-        tab = ttk.Frame(parent, padding=14)
-        tab.columnconfigure(0, weight=1)
-        tab.columnconfigure(1, weight=1)
+    def notebook_select_by_text(self, notebook: ttk.Notebook, text: str) -> None:
+        for tab_id in notebook.tabs():
+            if notebook.tab(tab_id, "text") == text:
+                notebook.select(tab_id)
+                return
 
-        one_click_box = ttk.LabelFrame(tab, text="新手一键修复", padding=12)
-        one_click_box.grid(row=0, column=0, columnspan=2, sticky=tk.EW, pady=(0, 12))
-        ttk.Label(
-            one_click_box,
-            text="自动处理 .codex-official 和 .codex：先关闭 Codex Desktop，再安全备份，最后修复历史可见性和项目列表。不会复制 auth.json、Token、API key 或 CC Switch 数据库。",
-            wraplength=980,
-            justify=tk.LEFT,
-        ).pack(anchor=tk.W, pady=(0, 10))
-        ttk.Button(
-            one_click_box,
-            text="一键安全备份并修复",
-            command=self.one_click_safe_sync_async,
-            style="Primary.TButton",
-        ).pack(anchor=tk.W)
+    def _build_settings_tab(self, parent: ttk.Notebook) -> ttk.Frame:
+        tab, content = self._scrollable_tab(parent)
+        content.columnconfigure(0, weight=1)
+        content.columnconfigure(1, weight=1)
 
-        sync_box = ttk.LabelFrame(tab, text="历史同步", padding=12)
-        sync_box.grid(row=1, column=0, sticky=tk.NSEW, padx=(0, 10))
-        ttk.Label(
-            sync_box,
-            text="适合切换 OpenAI 官方、API key、自定义通道、CC Switch 后，旧历史还在但当前账号/通道看不到的情况。",
-            wraplength=460,
-            justify=tk.LEFT,
-        ).pack(anchor=tk.W, pady=(0, 10))
-        ttk.Button(sync_box, text="同步历史到当前账号/通道", command=self.sync_async, style="Primary.TButton").pack(anchor=tk.W)
-
-        project_box = ttk.LabelFrame(tab, text="项目列表修复", padding=12)
-        project_box.grid(row=1, column=1, sticky=tk.NSEW)
-        ttk.Label(
-            project_box,
-            text="适合项目变少、重复、项目里显示暂无对话。请先完全退出 Codex Desktop，再修复。",
-            wraplength=460,
-            justify=tk.LEFT,
-        ).pack(anchor=tk.W, pady=(0, 10))
-        project_buttons = ttk.Frame(project_box)
-        project_buttons.pack(anchor=tk.W)
-        ttk.Button(project_buttons, text="项目诊断", command=self.project_diagnose_async).pack(side=tk.LEFT, padx=(0, 8))
-        ttk.Button(project_buttons, text="只修项目列表", command=self.project_repair_async, style="Primary.TButton").pack(side=tk.LEFT)
-
-        autosync_box = ttk.LabelFrame(tab, text="自动同步设置", padding=12)
-        autosync_box.grid(row=2, column=0, columnspan=2, sticky=tk.EW, pady=(12, 0))
-        for index in range(3):
-            autosync_box.columnconfigure(index, weight=1, uniform="autosync")
-
-        explain = ttk.Frame(autosync_box)
-        explain.grid(row=0, column=0, sticky=tk.NSEW, padx=(0, 12))
-        ttk.Label(explain, text="用途", style="StatusValue.TLabel").pack(anchor=tk.W)
-        ttk.Label(
-            explain,
-            text="适合经常切换账号/通道，又希望打开 Codex Desktop 后自动整理历史的情况。它不会迁移登录凭据、Token、API key 或 CC Switch 数据库。",
-            wraplength=330,
-            justify=tk.LEFT,
-        ).pack(anchor=tk.W, pady=(6, 0))
-
-        state = ttk.Frame(autosync_box)
-        state.grid(row=0, column=1, sticky=tk.NSEW, padx=(0, 12))
-        ttk.Label(state, text="当前状态", style="StatusValue.TLabel").pack(anchor=tk.W)
-        ttk.Label(state, textvariable=self.autosync_status_var, wraplength=330, justify=tk.LEFT).pack(anchor=tk.W, pady=(6, 0))
-        ttk.Label(state, textvariable=self.autosync_method_var, wraplength=330, justify=tk.LEFT).pack(anchor=tk.W, pady=(4, 0))
-        ttk.Label(state, textvariable=self.autosync_next_var, wraplength=330, justify=tk.LEFT).pack(anchor=tk.W, pady=(4, 0))
-
-        controls = ttk.Frame(autosync_box)
-        controls.grid(row=0, column=2, sticky=tk.NSEW)
-        ttk.Label(controls, text="操作", style="StatusValue.TLabel").pack(anchor=tk.W)
-        ttk.Label(
-            controls,
-            textvariable=self.autosync_help_var,
-            wraplength=330,
-            justify=tk.LEFT,
-        ).pack(anchor=tk.W, pady=(6, 10))
-        buttons = ttk.Frame(controls)
-        buttons.pack(anchor=tk.W, fill=tk.X)
-        ttk.Button(buttons, text="刷新自动同步状态", command=self.refresh_autosync_status_async).pack(anchor=tk.W, fill=tk.X, pady=(0, 6))
-        ttk.Button(buttons, text="开启自动同步", command=self.enable_autosync, style="Primary.TButton").pack(
-            anchor=tk.W,
-            fill=tk.X,
+        state = ttk.LabelFrame(content, text="后台运行状态", style="Card.TLabelframe")
+        state.grid(row=0, column=0, sticky=tk.NSEW, padx=(0, 12), pady=(0, 12))
+        ttk.Label(state, textvariable=self.autosync_status_var, style="PanelTitle.TLabel", wraplength=420).pack(anchor=tk.W)
+        ttk.Label(state, textvariable=self.autosync_method_var, style="PanelText.TLabel", wraplength=420, justify=tk.LEFT).pack(anchor=tk.W, pady=(8, 0))
+        ttk.Label(state, textvariable=self.autosync_next_var, style="PanelText.TLabel", wraplength=420, justify=tk.LEFT).pack(anchor=tk.W, pady=(4, 10))
+        state_buttons = ttk.Frame(state, style="Panel.TFrame")
+        state_buttons.pack(anchor=tk.W, fill=tk.X)
+        for index in range(2):
+            state_buttons.columnconfigure(index, weight=1)
+        ttk.Button(state_buttons, text="刷新状态", command=self.refresh_autosync_status_async).grid(
+            row=0,
+            column=0,
+            sticky=tk.EW,
+            padx=(0, 8),
             pady=(0, 6),
         )
-        ttk.Button(buttons, text="关闭自动同步", command=self.disable_autosync).pack(anchor=tk.W, fill=tk.X)
+        ttk.Button(state_buttons, text="开启后台同步", command=self.enable_autosync, style="Primary.TButton").grid(
+            row=0,
+            column=1,
+            sticky=tk.EW,
+            pady=(0, 6),
+        )
+        ttk.Button(state_buttons, text="关闭后台同步", command=self.disable_autosync).grid(row=1, column=0, columnspan=2, sticky=tk.EW)
+
+        rules = ttk.LabelFrame(content, text="自动处理范围", style="Card.TLabelframe")
+        rules.grid(row=0, column=1, sticky=tk.NSEW, pady=(0, 12))
+        checks = [
+            ("后台检测 Codex 状态", self.auto_detect_var),
+            ("自动修复聊天可见性", self.auto_fix_chats_var),
+            ("自动修复项目列表", self.auto_fix_projects_var),
+            ("同时关注 .codex 与 .codex-official", self.dual_home_var),
+            ("仅提示，不自动修改", self.detect_only_var),
+        ]
+        for text, variable in checks:
+            ttk.Checkbutton(rules, text=text, variable=variable).pack(anchor=tk.W, pady=(0, 6))
+        ttk.Label(
+            rules,
+            text="设置会保存到本机后台策略文件。项目列表自动修复默认关闭；打开后 watcher 会在检测到异常时尝试修复，并先生成安全备份。",
+            style="PanelText.TLabel",
+            wraplength=420,
+            justify=tk.LEFT,
+        ).pack(anchor=tk.W, pady=(8, 0))
+        ttk.Button(rules, text="保存自动同步设置", command=self.save_autosync_settings, style="Primary.TButton").pack(
+            anchor=tk.W,
+            fill=tk.X,
+            pady=(10, 0),
+        )
+
+        usage = ttk.LabelFrame(content, text="什么时候开启", style="Card.TLabelframe")
+        usage.grid(row=1, column=0, sticky=tk.EW, padx=(0, 12))
+        ttk.Label(
+            usage,
+            text="经常在 OpenAI 官方、API key、自定义 provider、CC Switch 之间切换时，可以开启。开启一次后，Windows 登录时会启动后台监听；关闭这个工具窗口后仍会继续运行。",
+            style="PanelText.TLabel",
+            wraplength=420,
+            justify=tk.LEFT,
+        ).pack(anchor=tk.W)
+        ttk.Button(usage, text="查看自动同步说明", command=self.show_autosync_help).pack(anchor=tk.W, pady=(10, 0))
+
+        safety = ttk.LabelFrame(content, text="不会自动迁移", style="Card.TLabelframe")
+        safety.grid(row=1, column=1, sticky=tk.EW)
+        ttk.Label(
+            safety,
+            text="不会默认复制 auth.json、OAuth token、API key、refresh token、CC Switch 数据库或账号路由数据。换电脑时应先在新电脑正常登录，再恢复历史和项目登记。",
+            style="PanelText.TLabel",
+            wraplength=420,
+            justify=tk.LEFT,
+        ).pack(anchor=tk.W)
         return tab
 
     def _build_backups_tab(self, parent: ttk.Notebook) -> ttk.Frame:
@@ -277,23 +323,74 @@ class WindowsSyncApp(tk.Tk):
         self.backups.heading("projects", text="项目")
         self.backups.heading("provider", text="通道")
         self.backups.heading("notes", text="备注")
-        self.backups.column("time", width=150, stretch=False)
-        self.backups.column("name", width=360)
-        self.backups.column("sessions", width=60, stretch=False, anchor=tk.CENTER)
-        self.backups.column("projects", width=60, stretch=False, anchor=tk.CENTER)
+        self.backups.column("time", width=140, stretch=False)
+        self.backups.column("name", width=300)
+        self.backups.column("sessions", width=58, stretch=False, anchor=tk.CENTER)
+        self.backups.column("projects", width=58, stretch=False, anchor=tk.CENTER)
         self.backups.column("provider", width=120, stretch=False)
-        self.backups.column("notes", width=260)
+        self.backups.column("notes", width=220)
+        y_scroll = ttk.Scrollbar(tab, orient=tk.VERTICAL, command=self.backups.yview)
+        x_scroll = ttk.Scrollbar(tab, orient=tk.HORIZONTAL, command=self.backups.xview)
+        self.backups.configure(yscrollcommand=y_scroll.set, xscrollcommand=x_scroll.set)
         self.backups.grid(row=1, column=0, sticky=tk.NSEW)
+        y_scroll.grid(row=1, column=1, sticky=tk.NS)
+        x_scroll.grid(row=2, column=0, sticky=tk.EW)
 
         backup_buttons = ttk.Frame(tab)
-        backup_buttons.grid(row=2, column=0, sticky=tk.W, pady=(10, 0))
-        ttk.Button(backup_buttons, text="恢复选中备份", command=self.restore_selected_async, style="Primary.TButton").pack(side=tk.LEFT, padx=(0, 8))
-        ttk.Button(backup_buttons, text="恢复最新备份", command=self.restore_latest_async).pack(side=tk.LEFT, padx=(0, 8))
-        ttk.Button(backup_buttons, text="查看详情", command=self.backup_details_async).pack(side=tk.LEFT, padx=(0, 8))
-        ttk.Button(backup_buttons, text="重命名", command=self.rename_backup_async).pack(side=tk.LEFT, padx=(0, 8))
-        ttk.Button(backup_buttons, text="写备注", command=self.edit_backup_notes_async).pack(side=tk.LEFT, padx=(0, 8))
-        ttk.Button(backup_buttons, text="删除", command=self.delete_backup_async).pack(side=tk.LEFT)
+        backup_buttons.grid(row=3, column=0, sticky=tk.W, pady=(10, 0))
+        buttons = [
+            ("恢复选中备份", self.restore_selected_async, "Primary.TButton"),
+            ("恢复最新备份", self.restore_latest_async, "Quiet.TButton"),
+            ("查看详情", self.backup_details_async, "Quiet.TButton"),
+            ("重命名", self.rename_backup_async, "Quiet.TButton"),
+            ("写备注", self.edit_backup_notes_async, "Quiet.TButton"),
+            ("删除", self.delete_backup_async, "Quiet.TButton"),
+        ]
+        for index, (text, command, button_style) in enumerate(buttons):
+            ttk.Button(backup_buttons, text=text, command=command, style=button_style).grid(
+                row=index // 3,
+                column=index % 3,
+                sticky=tk.W,
+                padx=(0, 8),
+                pady=(0, 6),
+            )
         return tab
+
+    def show_beginner_help(self) -> None:
+        lines = [
+            "第一次用：",
+            "1. 点“刷新状态”，确认读到历史和项目。",
+            "2. 点“手动备份”，先留一个安全点。",
+            "3. 切换登录方式后历史少了，点“只同步历史”。",
+            "4. 项目少了、重复、项目里暂无对话，先完全退出 Codex Desktop，再点“只修项目列表”。",
+            "",
+            "换电脑：",
+            "1. 新电脑先正常安装并登录 Codex Desktop。",
+            "2. 再恢复旧电脑备份。",
+            "3. 默认不迁移任何登录凭据或密钥。",
+        ]
+        messagebox.showinfo("新手教程", "\n".join(lines))
+
+    def show_autosync_help(self) -> None:
+        lines = [
+            "自动同步说明：",
+            "开启后不是每次打开本工具才同步，而是 Windows 登录后在后台运行。",
+            "关闭本工具窗口，不会关闭后台任务。",
+            "如果 Windows 限制任务计划，会使用启动文件夹备用方案。",
+            "",
+            "建议：",
+            "先手动同步确认稳定，再开启后台同步。",
+            "项目列表自动修复更谨慎，最好在 Codex Desktop 完全退出后执行。",
+        ]
+        messagebox.showinfo("自动同步说明", "\n".join(lines))
+
+    def save_autosync_settings(self) -> None:
+        settings = self.current_autosync_settings()
+        if settings["detect_only"] and (settings["auto_fix_chats"] or settings["auto_fix_projects"]):
+            messagebox.showinfo("设置已调整", "你开启了“仅提示，不自动修改”。后台会记录状态，但不会自动同步或修复。")
+        path = windows_autosync_settings.save_settings(settings)
+        self.append_log(f"自动同步设置已保存: {path}")
+        messagebox.showinfo("已保存", f"自动同步设置已保存。\n\n{path}")
 
     def _build_diagnostics_tab(self, parent: ttk.Notebook) -> ttk.Frame:
         tab = ttk.Frame(parent, padding=14)
@@ -314,13 +411,87 @@ class WindowsSyncApp(tk.Tk):
             try:
                 result = work()
             except Exception as exc:
-                self.after(0, lambda: messagebox.showerror(title, str(exc)))
-                self.after(0, lambda: self.append_log(f"{title}: {exc}"))
+                self.after(0, lambda: self.handle_background_error(title, exc))
                 return
             if on_success:
                 self.after(0, lambda: on_success(result))
 
         threading.Thread(target=runner, daemon=True).start()
+
+    def handle_background_error(self, title: str, exc: Exception) -> None:
+        message = str(exc)
+        self.append_log(f"{title}: {message}")
+        if self.is_provider_unresolved_message(message):
+            self.prompt_restart_thirdparty_flow(message)
+            return
+        messagebox.showerror(title, message)
+
+    def is_provider_unresolved_message(self, message: str) -> bool:
+        markers = [
+            "Could not determine current model_provider",
+            "当前无法判断 Codex 正在使用哪个 provider",
+            "config.toml has no model_provider",
+        ]
+        return any(marker in message for marker in markers)
+
+    def prompt_restart_thirdparty_flow(self, detail: str) -> None:
+        if not messagebox.askokcancel(
+            "需要重启启动器",
+            "检测到 Codex 当前通道状态不完整，通常是 CC Switch 还在运行时又选择了启动器 2，"
+            "导致 Codex 暂时无法判断 provider，所以历史列表会显示为空。\n\n"
+            "是否现在自动关闭 Codex 和 CC Switch，并重新按“第三方模式/启动器 2”启动？",
+        ):
+            return
+        self.run_background(self.restart_thirdparty_flow, self.after_restart_thirdparty_flow, "自动重启失败")
+
+    def restart_thirdparty_flow(self) -> dict[str, object]:
+        launcher = Path("F:/AI-Workspace/20_Projects/codex-windows-launcher/codex-launcher.ps1")
+        if not launcher.exists():
+            raise RuntimeError(f"没有找到 Codex Windows 启动器：{launcher}")
+
+        attempts: list[dict[str, object]] = []
+        for process_name in ("Codex.exe", "OpenAI.Codex.exe", "ccswitch.exe", "CCSwitch.exe", "cc-switch.exe"):
+            completed = subprocess.run(
+                ["taskkill", "/IM", process_name, "/T", "/F"],
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=15,
+            )
+            attempts.append(
+                {
+                    "process": process_name,
+                    "returncode": completed.returncode,
+                    "output": (completed.stdout or completed.stderr or "").strip(),
+                }
+            )
+
+        subprocess.Popen(
+            [
+                "powershell",
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                str(launcher),
+                "-Mode",
+                "thirdparty",
+            ],
+            cwd=str(launcher.parent),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        return {"launcher": str(launcher), "attempts": attempts}
+
+    def after_restart_thirdparty_flow(self, result: dict) -> None:
+        self.append_log(f"已调用启动器第三方模式重启：{result.get('launcher')}")
+        messagebox.showinfo(
+            "已开始重启",
+            "已关闭 Codex / CC Switch，并重新按启动器 2 启动。\n\n"
+            "等 Codex 窗口重新打开后，再点一次“刷新状态”或等待后台自动同步。",
+        )
+        self.provider_restart_prompted = False
 
     def backend(self, command: str, *args: str) -> dict:
         paths = sync_backend.resolve_paths(None)
@@ -375,11 +546,15 @@ class WindowsSyncApp(tk.Tk):
 
     def render_state(self, status: dict) -> None:
         self.latest_status = status
-        self.provider_var.set(str(status.get("current_provider") or "未知"))
+        provider_error = str(status.get("provider_resolution_error") or "")
+        self.provider_var.set(str(status.get("current_provider") or "通道未识别"))
         login_mode = status.get("login_mode") or {}
         self.login_var.set(self.login_mode_label(str(login_mode.get("mode") or "unknown")))
         self.model_var.set(str(status.get("current_model") or "未读取到"))
-        self.history_var.set(f"历史 {status.get('total_threads', 0)} 条，可整理 {status.get('movable_threads', 0)} 条")
+        if provider_error:
+            self.history_var.set(f"历史 {status.get('total_threads', 0)} 条，等待重启通道")
+        else:
+            self.history_var.set(f"历史 {status.get('total_threads', 0)} 条，可整理 {status.get('movable_threads', 0)} 条")
 
         diagnostics = status.get("project_diagnostics") or {}
         duplicate_count = len(diagnostics.get("duplicate_local_project_paths") or [])
@@ -388,11 +563,22 @@ class WindowsSyncApp(tk.Tk):
             f"最近 50 条项目历史 {diagnostics.get('recent_50_project_thread_count', 0)} 条"
         )
         self.path_var.set(f"数据库: {status.get('db_path')}")
+        backups = list(status.get("backups", []))
+        if backups:
+            newest = backups[0]
+            modified = str(newest.get("modified_at") or "").replace("T", " ")[:16]
+            sessions = newest.get("session_count") or "?"
+            projects = newest.get("project_root_count") or "?"
+            latest = modified or "已找到"
+            self.backup_summary_var.set(f"{len(backups)} 个\n最新：{latest}\n历史 {sessions} / 项目 {projects}")
+        else:
+            self.backup_summary_var.set("0 个\n建议先手动备份")
+        self.update_recommendation(status, duplicate_count)
 
         if hasattr(self, "backups"):
             for item in self.backups.get_children():
                 self.backups.delete(item)
-            self.backup_rows = list(status.get("backups", []))
+            self.backup_rows = backups
             for index, backup in enumerate(self.backup_rows):
                 title = backup.get("display_name") or backup.get("name")
                 self.backups.insert(
@@ -410,6 +596,41 @@ class WindowsSyncApp(tk.Tk):
                 )
 
         self.append_log(f"状态已刷新。当前账号/通道={status.get('current_provider')}，可整理历史={status.get('movable_threads')}")
+        if provider_error:
+            self.append_log(provider_error)
+            if not self.provider_restart_prompted:
+                self.provider_restart_prompted = True
+                self.prompt_restart_thirdparty_flow(provider_error)
+        else:
+            self.provider_restart_prompted = False
+
+    def update_recommendation(self, status: dict, duplicate_count: int) -> None:
+        if status.get("provider_resolution_error"):
+            self.recommendation_title_var.set("建议自动重启启动器")
+            self.recommendation_detail_var.set(
+                "当前通道状态不完整，通常是 CC Switch 未关闭时选择了启动器 2。请确认自动重启，让工具关闭 Codex 和 CC Switch 后重新按第三方模式启动。"
+            )
+            return
+        movable = int(status.get("movable_threads") or 0)
+        backups = list(status.get("backups", []))
+        diagnostics = status.get("project_diagnostics") or {}
+        recent_project_threads = int(diagnostics.get("recent_50_project_thread_count") or 0)
+        project_count = int(diagnostics.get("project_root_count") or 0)
+        if not backups:
+            self.recommendation_title_var.set("先做一个安全备份")
+            self.recommendation_detail_var.set("当前还没有可用备份。先点“手动备份”，以后恢复、同步或换电脑都有回退点。")
+        elif movable > 0 and (duplicate_count > 0 or project_count == 0 or recent_project_threads == 0):
+            self.recommendation_title_var.set("建议一键安全备份并修复")
+            self.recommendation_detail_var.set("检测到历史可整理，同时项目状态可能异常。一键流程会先备份，再整理历史和项目登记，不迁移任何登录凭据。")
+        elif movable > 0:
+            self.recommendation_title_var.set("建议同步历史到当前通道")
+            self.recommendation_detail_var.set("历史数据还在，但当前账号/通道可能看不到。点“只同步历史”即可先整理聊天记录。")
+        elif duplicate_count > 0 or (project_count > 0 and recent_project_threads == 0):
+            self.recommendation_title_var.set("建议只修项目列表")
+            self.recommendation_detail_var.set("项目列表可能重复或项目归属没有被 Codex 识别。请先完全退出 Codex Desktop，再执行项目修复。")
+        else:
+            self.recommendation_title_var.set("当前看起来正常")
+            self.recommendation_detail_var.set("可以先不用操作。切换 provider、换电脑或项目列表异常时，再回来同步或修复。")
 
     def readable_backup_title(self, title: str) -> str:
         return (
@@ -432,6 +653,10 @@ class WindowsSyncApp(tk.Tk):
     def sync_async(self) -> None:
         if not self.latest_status:
             self.refresh_state_async()
+            return
+        provider_error = str(self.latest_status.get("provider_resolution_error") or "")
+        if provider_error or not str(self.latest_status.get("current_provider") or "").strip():
+            self.prompt_restart_thirdparty_flow(provider_error)
             return
         movable = int(self.latest_status.get("movable_threads") or 0)
         if movable <= 0:
@@ -624,10 +849,21 @@ class WindowsSyncApp(tk.Tk):
         return base + " 只想临时整理一次历史时，不必开启自动同步。"
 
     def autosync_summary_values(self, result: dict) -> tuple[str, str, str, str]:
+        settings = result.get("settings") if isinstance(result.get("settings"), dict) else self.current_autosync_settings()
+        mode_notes = []
+        if settings.get("detect_only"):
+            mode_notes.append("仅提示")
+        if settings.get("auto_fix_chats"):
+            mode_notes.append("修聊天")
+        if settings.get("auto_fix_projects"):
+            mode_notes.append("修项目")
+        if settings.get("dual_home"):
+            mode_notes.append("双目录")
+        mode_text = "，".join(mode_notes) if mode_notes else "仅检测"
         if not result.get("exists"):
             return (
                 "未开启",
-                "需要时点“开启自动同步”一次",
+                f"需要时点“开启自动同步”一次；当前策略：{mode_text}",
                 "启用方式：未开启",
                 "生效时机：开启后，Windows 登录时自动启动后台监听",
             )
@@ -650,7 +886,7 @@ class WindowsSyncApp(tk.Tk):
 
         return (
             "已开启",
-            detail,
+            f"{detail}；当前策略：{mode_text}",
             method_text,
             "生效时机：Windows 登录后启动后台监听；打开 Codex Desktop 时检查并同步需要整理的历史",
         )
@@ -664,6 +900,14 @@ class WindowsSyncApp(tk.Tk):
         self.run_background(lambda: self.task_payload("status"), done, "查询自动同步状态失败")
 
     def render_autosync_status(self, result: dict) -> None:
+        settings = result.get("settings")
+        if isinstance(settings, dict):
+            normalized = windows_autosync_settings.normalize_settings(settings)
+            self.auto_detect_var.set(normalized["auto_detect"])
+            self.auto_fix_chats_var.set(normalized["auto_fix_chats"])
+            self.auto_fix_projects_var.set(normalized["auto_fix_projects"])
+            self.dual_home_var.set(normalized["dual_home"])
+            self.detect_only_var.set(normalized["detect_only"])
         message = self.autosync_status_message(result)
         headline, detail, method_text, next_text = self.autosync_summary_values(result)
         self.autosync_headline_var.set(headline)
@@ -685,6 +929,7 @@ class WindowsSyncApp(tk.Tk):
             messagebox.showerror("查询失败", str(exc))
 
     def enable_autosync(self) -> None:
+        windows_autosync_settings.save_settings(self.current_autosync_settings())
         if not messagebox.askokcancel(
             "开启自动同步",
             "开启后只需要设置一次。以后 Windows 登录后会自动启动后台同步；不需要每次打开本工具，也不需要每次点开启。",

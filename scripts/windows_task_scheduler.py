@@ -7,8 +7,13 @@ import subprocess
 import sys
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from scripts import windows_autosync_settings
+
+
 DEFAULT_BACKEND = ROOT / "sync_backend.py"
 DEFAULT_WATCHER = ROOT / "scripts" / "windows_auto_sync_watcher.py"
 DEFAULT_TASK_NAME = "CodexHistorySyncToolAutoSync"
@@ -60,6 +65,7 @@ def task_command(
     watcher: Path,
     backend: Path,
     codex_home: str | None,
+    state_dir: Path,
     log_path: Path,
     lock_path: Path,
     process_name: str,
@@ -73,6 +79,8 @@ def task_command(
         f'"{log_path}"',
         "--lock",
         f'"{lock_path}"',
+        "--settings-state-dir",
+        f'"{state_dir}"',
         "--process-name",
         f'"{process_name}"',
     ]
@@ -83,6 +91,7 @@ def task_command(
 
 def bundled_task_command(
     codex_home: str | None,
+    state_dir: Path,
     log_path: Path,
     lock_path: Path,
     process_name: str,
@@ -99,6 +108,8 @@ def bundled_task_command(
         f'"{log_path}"',
         "--lock",
         f'"{lock_path}"',
+        "--settings-state-dir",
+        f'"{state_dir}"',
         "--process-name",
         f'"{process_name}"',
     ]
@@ -119,9 +130,9 @@ def write_task_launcher(
     state_dir.mkdir(parents=True, exist_ok=True)
     launcher_path = state_dir / "autosync-task.cmd"
     if getattr(sys, "frozen", False):
-        command = bundled_task_command(codex_home, log_path, lock_path, process_name)
+        command = bundled_task_command(codex_home, state_dir, log_path, lock_path, process_name)
     else:
-        command = task_command(watcher, backend, codex_home, log_path, lock_path, process_name)
+        command = task_command(watcher, backend, codex_home, state_dir, log_path, lock_path, process_name)
     launcher_path.write_text(f"@echo off\r\n{command}\r\n", encoding="utf-8")
     return launcher_path
 
@@ -269,6 +280,7 @@ def uninstall_task(args: argparse.Namespace) -> dict[str, object]:
 
 
 def status_task(args: argparse.Namespace) -> dict[str, object]:
+    state_dir = Path(args.state_dir).expanduser().resolve()
     startup_dir = Path(args.startup_dir).expanduser().resolve()
     status = task_query(args.task_name)
     startup = startup_query(startup_dir)
@@ -282,6 +294,8 @@ def status_task(args: argparse.Namespace) -> dict[str, object]:
         **startup,
         "exists": exists,
         "method": method,
+        "settings_path": str(windows_autosync_settings.settings_path(state_dir)),
+        "settings": windows_autosync_settings.load_settings(state_dir),
     }
 
 

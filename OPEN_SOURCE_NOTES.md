@@ -22,6 +22,8 @@ Codex Desktop local history repair tool.
 - Disabled credential migration in safe repair paths.
 - Added provider guard logic so an unavailable `custom` provider is not written
   into official ChatGPT/OAuth configuration.
+- Added local visibility repair for hidden local chats without adding
+  cross-account shared-chat polling or credential migration.
 - Added project root repair logic that excludes transient dated Codex work
   directories from permanent sidebar project lists.
 - Added Windows smoke tests for backend, watcher, scheduler, packaged app, and

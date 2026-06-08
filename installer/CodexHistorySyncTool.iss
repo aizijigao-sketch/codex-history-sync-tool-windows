@@ -1,5 +1,5 @@
 #define MyAppName "Codex History Sync Tool"
-#define MyAppVersion "0.3.1-launcher-compatible"
+#define MyAppVersion "0.3.4-smart-autorepair"
 #define MyAppPublisher "Codex History Sync Tool Contributors"
 #define MyAppExeName "CodexHistorySyncTool.exe"
 #define MyAppCliExeName "CodexHistorySyncToolCli.exe"
@@ -11,7 +11,9 @@ AppVersion={#MyAppVersion}
 AppPublisher={#MyAppPublisher}
 DefaultDirName={localappdata}\Programs\Codex History Sync Tool
 DefaultGroupName={#MyAppName}
+DisableDirPage=no
 DisableProgramGroupPage=yes
+UsePreviousAppDir=no
 OutputDir=..\release
 OutputBaseFilename=Codex-History-Sync-Tool-{#MyAppVersion}-Setup
 Compression=lzma2

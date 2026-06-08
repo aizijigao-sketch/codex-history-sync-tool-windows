@@ -15,11 +15,14 @@ history, credentials, tokens, API keys, or provider databases.
 - Synchronizes local thread provider/model metadata to the currently active
   Codex configuration.
 - Rebuilds the local session index used by the Codex sidebar.
+- Repairs local visibility flags that can make existing chats look hidden after
+  provider or login switching.
 - Repairs project roots shown in the Codex sidebar.
 - Filters transient Codex work directories such as dated temporary workspaces
   so they are not promoted into permanent sidebar projects.
-- Provides a Windows desktop launcher and optional Windows auto-sync watcher.
-- Provides an Inno Setup installer build flow.
+- Provides a Windows desktop launcher and optional low-frequency Windows
+  auto-sync watcher.
+- Provides an Inno Setup installer build flow with a selectable install path.
 
 ## Typical Use Cases
 
@@ -32,6 +35,7 @@ history, credentials, tokens, API keys, or provider databases.
 ## What It Does Not Do
 
 - It does not sync cloud chat records between OpenAI accounts.
+- It does not run a high-frequency shared-chat polling service.
 - It does not migrate credentials or tokens.
 - It does not copy third-party key manager databases.
 - It does not recover local history files that were already deleted.

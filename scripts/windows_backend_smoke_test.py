@@ -59,19 +59,22 @@ def create_fixture(codex_home: Path) -> None:
               model TEXT,
               cwd TEXT,
               updated_at INTEGER,
-              archived INTEGER DEFAULT 0
+              archived INTEGER DEFAULT 0,
+              archived_at INTEGER,
+              has_user_event INTEGER DEFAULT 1,
+              first_user_message TEXT
             )
             """
         )
         conn.executemany(
             """
             INSERT INTO threads
-              (id, title, model_provider, model, cwd, updated_at, archived)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+              (id, title, model_provider, model, cwd, updated_at, archived, archived_at, has_user_event, first_user_message)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             [
-                ("thread-current", "Current provider", "openai", "gpt-5", "C:/work/current", 1, 0),
-                ("thread-old", "Old provider", "old-provider", "old-model", "C:/work/old", 2, 0),
+                ("thread-current", "Current provider", "openai", "gpt-5", "C:/work/current", 1, 0, None, 1, "hello"),
+                ("thread-old", "Old provider", "old-provider", "old-model", "C:/work/old", 2, 0, None, 1, "old hello"),
                 (
                     "thread-transient",
                     "Transient Codex workspace",
@@ -80,6 +83,33 @@ def create_fixture(codex_home: Path) -> None:
                     str(Path.home() / "Documents" / "Codex" / "2026-06-06" / "new-chat"),
                     3,
                     0,
+                    None,
+                    1,
+                    "transient hello",
+                ),
+                (
+                    "thread-hidden",
+                    "Hidden by visibility flags",
+                    "old-provider",
+                    "old-model",
+                    r"\\?\C:\work\hidden",
+                    4,
+                    1,
+                    12345,
+                    0,
+                    "hidden hello",
+                ),
+                (
+                    "thread-user-archived",
+                    "User archived",
+                    "old-provider",
+                    "old-model",
+                    "C:/work/user-archived",
+                    5,
+                    1,
+                    67890,
+                    1,
+                    "archived hello",
                 ),
             ],
         )
@@ -98,10 +128,24 @@ def create_fixture(codex_home: Path) -> None:
         encoding="utf-8",
     )
     write_session_meta(codex_home, "thread-old", "old-provider", "old-model")
+    write_session_meta(codex_home, "thread-hidden", "old-provider", "old-model", folder="archived_sessions")
+    (codex_home / "session_index.jsonl").write_text(
+        json.dumps(
+            {
+                "id": "thread-current",
+                "thread_name": "Current provider",
+                "updated_at": "2026-06-06T00:00:00Z",
+                "extra_field": "keep-me",
+            },
+            separators=(",", ":"),
+        )
+        + "\n",
+        encoding="utf-8",
+    )
 
 
-def write_session_meta(codex_home: Path, thread_id: str, provider: str, model: str) -> None:
-    session_dir = codex_home / "sessions"
+def write_session_meta(codex_home: Path, thread_id: str, provider: str, model: str, folder: str = "sessions") -> None:
+    session_dir = codex_home / folder
     session_dir.mkdir(parents=True, exist_ok=True)
     session_path = session_dir / f"rollout-test-{thread_id}.jsonl"
     payload = {
@@ -128,9 +172,22 @@ def provider_for(codex_home: Path, thread_id: str) -> tuple[str, str]:
 
 def session_provider_for(codex_home: Path, thread_id: str) -> tuple[str, str]:
     session_path = codex_home / "sessions" / f"rollout-test-{thread_id}.jsonl"
+    if not session_path.exists():
+        session_path = codex_home / "archived_sessions" / f"rollout-test-{thread_id}.jsonl"
     item = json.loads(session_path.read_text(encoding="utf-8").splitlines()[0])
     payload = item["payload"]
     return str(payload["model_provider"]), str(payload["model"])
+
+
+def thread_visibility_for(codex_home: Path, thread_id: str) -> tuple[str, int, int, object | None]:
+    with sqlite3.connect(codex_home / "state_5.sqlite") as conn:
+        row = conn.execute(
+            "SELECT cwd, has_user_event, archived, archived_at FROM threads WHERE id = ?",
+            (thread_id,),
+        ).fetchone()
+    if row is None:
+        raise RuntimeError(f"Missing fixture row: {thread_id}")
+    return str(row[0]), int(row[1]), int(row[2]), row[3]
 
 
 def read_global_state(codex_home: Path) -> dict:
@@ -149,6 +206,17 @@ def create_invalid_custom_fixture(codex_home: Path, chatgpt_auth: bool) -> None:
         conn.execute("UPDATE threads SET model_provider = 'custom', model = 'gpt-5'")
         conn.commit()
     write_session_meta(codex_home, "thread-old", "custom", "gpt-5")
+
+
+def create_unresolved_provider_fixture(codex_home: Path) -> None:
+    create_fixture(codex_home)
+    (codex_home / "config.toml").write_text('model = "gpt-5"\n', encoding="utf-8")
+    with sqlite3.connect(codex_home / "state_5.sqlite") as conn:
+        conn.execute("UPDATE threads SET model_provider = 'custom', model = 'gpt-5'")
+        conn.commit()
+    auth_path = codex_home / "auth.json"
+    if auth_path.exists():
+        auth_path.unlink()
 
 
 def main() -> int:
@@ -184,6 +252,29 @@ def main() -> int:
             raise AssertionError("Sync did not update provider/model")
         if session_provider_for(codex_home, "thread-old") != ("openai", "gpt-5"):
             raise AssertionError("Sync did not update session_meta provider/model")
+        if session_provider_for(codex_home, "thread-hidden") != ("openai", "gpt-5"):
+            raise AssertionError("Sync did not update archived session_meta provider/model")
+        hidden_cwd, hidden_user_event, hidden_archived, hidden_archived_at = thread_visibility_for(
+            codex_home, "thread-hidden"
+        )
+        if (
+            hidden_cwd != "C:\\work\\hidden"
+            or hidden_user_event != 1
+            or hidden_archived != 0
+            or hidden_archived_at is not None
+        ):
+            raise AssertionError("Sync did not repair hidden thread visibility flags")
+        user_archived = thread_visibility_for(codex_home, "thread-user-archived")
+        if user_archived != ("C:/work/user-archived", 1, 1, 67890):
+            raise AssertionError("Sync should not unarchive a normal user-archived thread")
+        index_rows = [
+            json.loads(line)
+            for line in (codex_home / "session_index.jsonl").read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+        current_index = next((row for row in index_rows if row.get("id") == "thread-current"), None)
+        if current_index is None or current_index.get("extra_field") != "keep-me":
+            raise AssertionError("Rebuilt session_index.jsonl did not preserve unknown fields")
 
         repair_result = run_backend(codex_home, "project-repair")
         state = read_global_state(codex_home)
@@ -228,6 +319,17 @@ def main() -> int:
             raise AssertionError("Invalid custom provider error message was not explanatory")
         if provider_for(api_home, "thread-old") != ("custom", "gpt-5"):
             raise AssertionError("Failed invalid custom sync should not rewrite database rows")
+
+        unresolved_home = temp_root / ".codex-unresolved"
+        create_unresolved_provider_fixture(unresolved_home)
+        unresolved_status = run_backend(unresolved_home, "status")
+        if unresolved_status["current_provider"] != "" or not unresolved_status.get("provider_resolution_error"):
+            raise AssertionError("Unresolved provider status should succeed with a provider_resolution_error")
+        returncode, unresolved_sync = run_backend_raw(unresolved_home, "sync")
+        if returncode == 0 or unresolved_sync.get("ok"):
+            raise AssertionError("Unresolved provider sync should fail instead of writing empty provider")
+        if "当前无法判断 Codex 正在使用哪个 provider" not in str(unresolved_sync.get("error")):
+            raise AssertionError("Unresolved provider sync error should be user-facing Chinese")
 
         final_status = run_backend(codex_home, "status")
         if not final_status.get("login_mode") or "project_diagnostics" not in final_status:
