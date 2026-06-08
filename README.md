@@ -23,6 +23,8 @@ history, credentials, tokens, API keys, or provider databases.
   so they are not promoted into permanent sidebar projects.
 - Provides a Windows desktop launcher and optional smart auto-repair watcher.
 - Provides an Inno Setup installer build flow.
+- Shows the installer directory selection page so users can choose their own
+  installation path.
 
 ## Typical Use Cases
 
