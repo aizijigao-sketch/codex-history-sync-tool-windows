@@ -53,8 +53,13 @@ def main(argv: list[str] | None = None) -> int:
         return run_watcher(remaining)
     if mode == "--task":
         return run_task(remaining)
+    if mode == "--version":
+        import sync_backend
+
+        print(sync_backend.TOOL_VERSION)
+        return 0
     if mode in ("-h", "--help"):
-        print("Usage: CodexHistorySyncTool.exe [--run-backend|--run-watcher|--task] ...")
+        print("Usage: CodexHistorySyncTool.exe [--run-backend|--run-watcher|--task|--version] ...")
         return 0
 
     import launch_ui_windows

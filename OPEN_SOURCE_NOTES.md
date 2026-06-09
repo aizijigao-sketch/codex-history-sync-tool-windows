@@ -24,6 +24,7 @@ Codex Desktop local history repair tool.
   into official ChatGPT/OAuth configuration.
 - Added local visibility repair for hidden local chats without adding
   cross-account shared-chat polling or credential migration.
+- Added watcher stale-lock recovery and auto-sync health diagnostics.
 - Added project root repair logic that excludes transient dated Codex work
   directories from permanent sidebar project lists.
 - Added Windows smoke tests for backend, watcher, scheduler, packaged app, and

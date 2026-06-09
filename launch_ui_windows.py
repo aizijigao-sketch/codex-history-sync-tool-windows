@@ -14,7 +14,8 @@ from scripts import windows_autosync_settings, windows_task_scheduler
 class WindowsSyncApp(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
-        self.title("Codex 历史同步工具")
+        self.version_label = f"v{sync_backend.TOOL_VERSION}"
+        self.title(f"Codex 历史同步工具 {self.version_label}")
         self.geometry("980x680")
         self.minsize(760, 560)
         self.latest_status: dict | None = None
@@ -92,7 +93,7 @@ class WindowsSyncApp(tk.Tk):
         root.columnconfigure(0, weight=1)
         root.rowconfigure(2, weight=1)
 
-        ttk.Label(root, text="Codex 历史同步工具", style="Title.TLabel").grid(row=0, column=0, sticky=tk.W)
+        ttk.Label(root, text=f"Codex 历史同步工具 {self.version_label}", style="Title.TLabel").grid(row=0, column=0, sticky=tk.W)
         ttk.Label(
             root,
             text="多登录方式、多 provider、多电脑迁移的历史同步与项目修复。默认不迁移登录凭据、Token、API key 或 CC Switch 数据库。",
@@ -836,6 +837,9 @@ class WindowsSyncApp(tk.Tk):
     def autosync_status_message(self, result: dict) -> str:
         if not result.get("exists"):
             return "未开启"
+        health = result.get("health") if isinstance(result.get("health"), dict) else {}
+        if health.get("watcher_stale_lock"):
+            return "已开启，但后台锁文件异常，建议重新开启自动同步"
         method = result.get("method") or "未知"
         message = f"已开启，使用 {self.autosync_method_label(method)}"
         if method == "startup":
@@ -850,6 +854,7 @@ class WindowsSyncApp(tk.Tk):
 
     def autosync_summary_values(self, result: dict) -> tuple[str, str, str, str]:
         settings = result.get("settings") if isinstance(result.get("settings"), dict) else self.current_autosync_settings()
+        health = result.get("health") if isinstance(result.get("health"), dict) else {}
         mode_notes = []
         if settings.get("detect_only"):
             mode_notes.append("仅提示")
@@ -883,6 +888,22 @@ class WindowsSyncApp(tk.Tk):
         launcher = result.get("startup_launcher_path")
         if method == "startup" and launcher:
             method_text += f"\n启动脚本：{launcher}"
+
+        health_notes = []
+        if health.get("watcher_stale_lock"):
+            pid = health.get("watcher_lock_pid")
+            health_notes.append(f"发现旧锁文件，PID {pid or '未知'} 未运行；新版会自动清理，建议重新开启一次自动同步")
+        if health.get("watcher_log_exists"):
+            age = health.get("watcher_log_age_seconds")
+            if isinstance(age, (int, float)) and age > 86400:
+                days = int(age // 86400)
+                health_notes.append(f"后台日志约 {days} 天未更新，可能没有实际运行")
+        elif result.get("exists"):
+            health_notes.append("尚未发现后台日志，可能需要重新开启后等待首次启动")
+        if not health.get("task_launcher_exists", True):
+            health_notes.append("启动命令文件缺失，建议重新开启自动同步")
+        if health_notes:
+            detail += "；" + "；".join(health_notes)
 
         return (
             "已开启",

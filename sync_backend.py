@@ -19,7 +19,7 @@ SESSION_FILENAME_PATTERN = re.compile(
     r"rollout-.*-(?P<id>[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$"
 )
 UTC = timezone.utc
-TOOL_VERSION = "0.3.4-smart-autorepair"
+TOOL_VERSION = "0.3.5-autosync-health"
 UPSTREAM_VERSION = "v0.2.5"
 DEFAULT_DB_TIMEOUT_SECONDS = 30.0
 WRITE_OPERATION_TIMEOUT_SECONDS = 0.5
@@ -1546,6 +1546,7 @@ def sync_session_records(paths: Paths, current_provider: str, current_model: str
     before_meta_stats = scan_session_meta_stats(paths, current_provider, current_model)
     updated_session_files = 0
     updated_session_meta_entries = 0
+    skipped_busy_session_files = 0
 
     for path in iter_session_paths(paths):
         text = read_text_exact(path)
@@ -1585,14 +1586,20 @@ def sync_session_records(paths: Paths, current_provider: str, current_model: str
             updated_session_meta_entries += 1
 
         if changed:
-            write_text_exact(path, "".join(new_lines))
-            updated_session_files += 1
+            try:
+                write_text_exact(path, "".join(new_lines))
+                updated_session_files += 1
+            except RuntimeError as exc:
+                if "File is busy and could not be replaced" not in str(exc):
+                    raise
+                skipped_busy_session_files += 1
 
     after_records = scan_session_records(paths)
     after_meta_stats = scan_session_meta_stats(paths, current_provider, current_model)
     return {
         "updated_session_files": updated_session_files,
         "updated_session_meta_entries": updated_session_meta_entries,
+        "skipped_busy_session_files": skipped_busy_session_files,
         "session_before_counts": counts_to_rows(
             ordered_counts([record.model_provider for record in before_records])
         ),
@@ -1957,6 +1964,7 @@ def sync_to_current_provider(paths: Paths, create_backup: bool = True) -> dict[s
         "visibility_updates": db_summary["visibility_updates"],
         "updated_session_files": session_summary["updated_session_files"],
         "updated_session_meta_entries": session_summary["updated_session_meta_entries"],
+        "skipped_busy_session_files": session_summary["skipped_busy_session_files"],
         "provider_movable_threads": status_before["provider_movable_threads"],
         "model_movable_threads": status_before["model_movable_threads"],
         "backup_path": str(backup_path) if backup_path else "",

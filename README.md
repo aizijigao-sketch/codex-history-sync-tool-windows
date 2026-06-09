@@ -22,6 +22,9 @@ history, credentials, tokens, API keys, or provider databases.
   so they are not promoted into permanent sidebar projects.
 - Provides a Windows desktop launcher and optional low-frequency Windows
   auto-sync watcher.
+- Reports auto-sync health issues such as stale watcher locks or old logs.
+- Skips temporarily busy active session files during background repair instead
+  of failing the whole watcher run.
 - Provides an Inno Setup installer build flow with a selectable install path.
 
 ## Typical Use Cases

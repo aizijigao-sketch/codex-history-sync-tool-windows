@@ -183,6 +183,52 @@ def main() -> int:
         if "Detect-only mode" not in log_path.read_text(encoding="utf-8"):
             raise AssertionError("detect-only mode was not logged")
 
+        stale_lock_home = temp_root / ".codex-stale-lock"
+        create_fixture(stale_lock_home)
+        lock_path.write_text("999999", encoding="utf-8")
+        log_path.unlink(missing_ok=True)
+        (settings_dir / "autosync-settings.json").write_text(
+            json.dumps(
+                {
+                    "auto_detect": True,
+                    "auto_fix_chats": True,
+                    "auto_fix_projects": False,
+                    "dual_home": False,
+                    "detect_only": False,
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        stale_lock = subprocess.run(
+            [
+                sys.executable,
+                str(WATCHER),
+                "--backend",
+                str(BACKEND),
+                "--codex-home",
+                str(stale_lock_home),
+                "--log",
+                str(log_path),
+                "--lock",
+                str(lock_path),
+                "--settings-state-dir",
+                str(settings_dir),
+                "--process-name",
+                "python.exe",
+                "--once",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if stale_lock.returncode != 0:
+            raise RuntimeError(f"watcher did not recover from stale lock: {stale_lock.stderr or stale_lock.stdout}")
+        if lock_path.exists():
+            raise AssertionError("watcher did not remove lock after recovering stale lock")
+        if provider_for(stale_lock_home, "thread-old") != ("openai", "gpt-5"):
+            raise AssertionError("stale-lock watcher run did not sync provider/model")
+
         fingerprint_home = temp_root / ".codex-fingerprint"
         create_fixture(fingerprint_home)
         lock_path.unlink(missing_ok=True)

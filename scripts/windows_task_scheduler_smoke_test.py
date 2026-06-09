@@ -93,6 +93,9 @@ def main() -> int:
     state_dir = Path(tempfile.mkdtemp(prefix="codex-task-smoke-"))
     startup_dir = state_dir / "Startup"
     try:
+        state_dir.mkdir(parents=True, exist_ok=True)
+        stale_lock_path = state_dir / "autosync.lock"
+        stale_lock_path.write_text("999999", encoding="utf-8")
         install_code, install = run_tool_allow_failure(
             "install",
             "--task-name",
@@ -117,10 +120,17 @@ def main() -> int:
                 print(json.dumps(summary, ensure_ascii=False, indent=2))
                 return 0
             raise RuntimeError(error or json.dumps(install, ensure_ascii=False))
+        if not install.get("removed_stale_lock"):
+            raise AssertionError("install did not report stale lock cleanup")
+        if stale_lock_path.exists():
+            raise AssertionError("install did not remove stale autosync lock")
 
         status = run_tool("status", "--task-name", task_name, "--startup-dir", str(startup_dir))
         if not status.get("exists"):
             raise AssertionError("auto-sync launcher was not created")
+        health = status.get("health")
+        if not isinstance(health, dict) or "watcher_stale_lock" not in health:
+            raise AssertionError("status did not include watcher health diagnostics")
         uninstall = run_tool("uninstall", "--task-name", task_name, "--startup-dir", str(startup_dir))
         status_after = run_tool("status", "--task-name", task_name, "--startup-dir", str(startup_dir))
         if status_after.get("exists"):

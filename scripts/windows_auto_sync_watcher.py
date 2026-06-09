@@ -25,6 +25,24 @@ DEFAULT_COOLDOWN_SECONDS = 60.0
 DEFAULT_PROCESS_NAME = "Codex.exe"
 
 
+def process_exists(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    try:
+        completed = subprocess.run(
+            ["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        return True
+    if completed.returncode != 0:
+        return True
+    output = completed.stdout.strip()
+    return bool(output and "INFO:" not in output)
+
+
 def append_log(path: Path | None, message: str) -> None:
     timestamp = datetime.now().isoformat(timespec="seconds")
     line = f"[{timestamp}] {message}"
@@ -49,9 +67,29 @@ class SingleInstanceLock:
         try:
             self.fd = os.open(str(self.path), flags)
         except FileExistsError as exc:
+            if self.try_remove_stale_lock():
+                self.fd = os.open(str(self.path), flags)
+                os.write(self.fd, str(os.getpid()).encode("utf-8"))
+                return self
             raise RuntimeError(f"another watcher instance is already running: {self.path}") from exc
         os.write(self.fd, str(os.getpid()).encode("utf-8"))
         return self
+
+    def try_remove_stale_lock(self) -> bool:
+        if self.path is None:
+            return False
+        try:
+            text = self.path.read_text(encoding="utf-8").strip()
+            pid = int(text) if text else 0
+        except (OSError, ValueError):
+            pid = 0
+        if pid and process_exists(pid):
+            return False
+        try:
+            self.path.unlink()
+            return True
+        except OSError:
+            return False
 
     def __exit__(self, exc_type, exc, tb) -> None:
         if self.fd is not None:
@@ -127,7 +165,11 @@ def watched_codex_homes(codex_home: str | None, dual_home: bool) -> list[str | N
     if not dual_home:
         return [None]
     homes = [Path.home() / ".codex", Path.home() / ".codex-official"]
-    existing = [str(path) for path in homes if path.exists()]
+    existing = [
+        str(path)
+        for path in homes
+        if path.exists() and (path / "config.toml").exists() and (path / "state_5.sqlite").exists()
+    ]
     return existing or [None]
 
 
@@ -228,10 +270,25 @@ def sync_if_needed(
         "Auto sync completed: "
         f"updated_rows={payload.get('updated_rows')}, "
         f"updated_session_files={payload.get('updated_session_files')}, "
+        f"skipped_busy_session_files={payload.get('skipped_busy_session_files')}, "
         f"visibility_updates={json.dumps(visibility_updates, ensure_ascii=False)}, "
         f"backup={payload.get('backup_path')}",
     )
     return True
+
+
+def sync_home_safely(
+    backend: Path,
+    home: str | None,
+    log_path: Path | None,
+    settings: dict[str, bool],
+    reason: str,
+) -> bool:
+    try:
+        return sync_if_needed(backend, home, log_path, settings, reason)
+    except Exception as exc:
+        append_log(log_path, f"{reason} failed for home={home or 'default'}: {exc}")
+        return False
 
 
 def watch(args: argparse.Namespace) -> int:
@@ -257,7 +314,7 @@ def watch(args: argparse.Namespace) -> int:
             if initial_open:
                 time.sleep(args.initial_delay)
                 for home in homes:
-                    sync_if_needed(backend, home, log_path, settings, "Codex opened")
+                    sync_home_safely(backend, home, log_path, settings, "Codex opened")
             else:
                 append_log(log_path, "Auto sync skipped: Codex process is not running")
             return 0
@@ -275,7 +332,7 @@ def watch(args: argparse.Namespace) -> int:
                     settings = windows_autosync_settings.load_settings(args.settings_state_dir)
                     homes = watched_codex_homes(args.codex_home, settings["dual_home"])
                     for home in homes:
-                        sync_if_needed(backend, home, log_path, settings, "Codex opened")
+                        sync_home_safely(backend, home, log_path, settings, "Codex opened")
                         if not args.no_fingerprint:
                             try:
                                 last_fingerprints[home or "default"] = codex_home_fingerprint(home)
@@ -307,7 +364,7 @@ def watch(args: argparse.Namespace) -> int:
                             append_log(log_path, "Smart auto repair delayed: cooldown active")
                             continue
                         pending_since.pop(home_key, None)
-                        did_sync = sync_if_needed(backend, home, log_path, settings, "Smart auto repair check")
+                        did_sync = sync_home_safely(backend, home, log_path, settings, "Smart auto repair check")
                         cooldown_until[home_key] = time.monotonic() + args.cooldown
                         if did_sync:
                             try:

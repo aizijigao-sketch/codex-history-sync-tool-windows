@@ -5,6 +5,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -169,6 +170,72 @@ def startup_query(startup_dir: Path) -> dict[str, object]:
     }
 
 
+def process_exists(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    try:
+        tasklist = subprocess.run(
+            ["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        return True
+    if tasklist.returncode != 0:
+        return True
+    output = tasklist.stdout.strip()
+    return bool(output and "INFO:" not in output)
+
+
+def watcher_health(state_dir: Path, log_path: Path, lock_path: Path) -> dict[str, object]:
+    lock_exists = lock_path.exists()
+    lock_pid: int | None = None
+    lock_pid_running = False
+    stale_lock = False
+    if lock_exists:
+        try:
+            text = lock_path.read_text(encoding="utf-8").strip()
+            lock_pid = int(text) if text else None
+        except (OSError, ValueError):
+            lock_pid = None
+        lock_pid_running = process_exists(lock_pid) if lock_pid is not None else False
+        stale_lock = not lock_pid_running
+
+    log_exists = log_path.exists()
+    log_age_seconds: float | None = None
+    if log_exists:
+        try:
+            log_age_seconds = max(0.0, time.time() - log_path.stat().st_mtime)
+        except OSError:
+            log_age_seconds = None
+
+    launcher_path = state_dir / "autosync-task.cmd"
+    return {
+        "watcher_log_path": str(log_path),
+        "watcher_log_exists": log_exists,
+        "watcher_log_age_seconds": log_age_seconds,
+        "watcher_lock_path": str(lock_path),
+        "watcher_lock_exists": lock_exists,
+        "watcher_lock_pid": lock_pid,
+        "watcher_lock_pid_running": lock_pid_running,
+        "watcher_stale_lock": stale_lock,
+        "task_launcher_path": str(launcher_path),
+        "task_launcher_exists": launcher_path.exists(),
+    }
+
+
+def remove_stale_lock(lock_path: Path) -> bool:
+    health = watcher_health(lock_path.parent, lock_path.parent / "autosync.log", lock_path)
+    if not health.get("watcher_stale_lock"):
+        return False
+    try:
+        lock_path.unlink()
+        return True
+    except OSError:
+        return False
+
+
 def scheduler_error_text(error: object) -> str:
     if isinstance(error, subprocess.CompletedProcess):
         return (error.stderr or error.stdout).strip()
@@ -183,6 +250,7 @@ def scheduler_install_failed_payload(
     scheduler_error: object,
     log_path: Path,
     lock_path: Path,
+    removed_stale_lock: bool,
 ) -> dict[str, object]:
     task_error = scheduler_error_text(scheduler_error)
     return {
@@ -199,6 +267,7 @@ def scheduler_install_failed_payload(
         "startup_launcher_path": str(startup_path),
         "log_path": str(log_path),
         "lock_path": str(lock_path),
+        "removed_stale_lock": removed_stale_lock,
     }
 
 
@@ -216,6 +285,7 @@ def install_task(args: argparse.Namespace) -> dict[str, object]:
         raise RuntimeError(f"backend does not exist: {backend}")
 
     state_dir.mkdir(parents=True, exist_ok=True)
+    removed_stale_lock = remove_stale_lock(lock_path)
     launcher_path = write_task_launcher(
         state_dir,
         watcher,
@@ -241,10 +311,14 @@ def install_task(args: argparse.Namespace) -> dict[str, object]:
         )
     except OSError as exc:
         startup_path = write_startup_launcher(startup_dir, launcher_path)
-        return scheduler_install_failed_payload(args, command, launcher_path, startup_path, exc, log_path, lock_path)
+        return scheduler_install_failed_payload(
+            args, command, launcher_path, startup_path, exc, log_path, lock_path, removed_stale_lock
+        )
     if completed.returncode != 0:
         startup_path = write_startup_launcher(startup_dir, launcher_path)
-        return scheduler_install_failed_payload(args, command, launcher_path, startup_path, completed, log_path, lock_path)
+        return scheduler_install_failed_payload(
+            args, command, launcher_path, startup_path, completed, log_path, lock_path, removed_stale_lock
+        )
     remove_startup_launcher(startup_dir)
     return {
         "ok": True,
@@ -258,6 +332,7 @@ def install_task(args: argparse.Namespace) -> dict[str, object]:
         "task_error": "",
         "log_path": str(log_path),
         "lock_path": str(lock_path),
+        "removed_stale_lock": removed_stale_lock,
     }
 
 
@@ -282,6 +357,8 @@ def uninstall_task(args: argparse.Namespace) -> dict[str, object]:
 def status_task(args: argparse.Namespace) -> dict[str, object]:
     state_dir = Path(args.state_dir).expanduser().resolve()
     startup_dir = Path(args.startup_dir).expanduser().resolve()
+    log_path = Path(args.log).expanduser().resolve() if args.log else state_dir / "autosync.log"
+    lock_path = Path(args.lock).expanduser().resolve() if args.lock else state_dir / "autosync.lock"
     status = task_query(args.task_name)
     startup = startup_query(startup_dir)
     exists = bool(status["exists"] or startup["startup_exists"])
@@ -296,6 +373,7 @@ def status_task(args: argparse.Namespace) -> dict[str, object]:
         "method": method,
         "settings_path": str(windows_autosync_settings.settings_path(state_dir)),
         "settings": windows_autosync_settings.load_settings(state_dir),
+        "health": watcher_health(state_dir, log_path, lock_path),
     }
 
 
