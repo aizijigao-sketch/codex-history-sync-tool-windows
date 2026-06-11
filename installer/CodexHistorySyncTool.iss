@@ -1,5 +1,5 @@
 #define MyAppName "Codex History Sync Tool"
-#define MyAppVersion "0.3.5-autosync-health"
+#define MyAppVersion "0.3.6-archive-index-health"
 #define MyAppPublisher "Codex History Sync Tool Contributors"
 #define MyAppExeName "CodexHistorySyncTool.exe"
 #define MyAppCliExeName "CodexHistorySyncToolCli.exe"

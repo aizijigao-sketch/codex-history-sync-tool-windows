@@ -19,7 +19,7 @@ SESSION_FILENAME_PATTERN = re.compile(
     r"rollout-.*-(?P<id>[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$"
 )
 UTC = timezone.utc
-TOOL_VERSION = "0.3.5-autosync-health"
+TOOL_VERSION = "0.3.6-archive-index-health"
 UPSTREAM_VERSION = "v0.2.5"
 DEFAULT_DB_TIMEOUT_SECONDS = 30.0
 WRITE_OPERATION_TIMEOUT_SECONDS = 0.5
@@ -900,8 +900,10 @@ def archived_visibility_repair_condition(columns: set[str]) -> str:
 def query_visibility_candidates(
     conn: sqlite3.Connection,
     columns: set[str],
+    archived_session_thread_ids: set[str] | None = None,
 ) -> tuple[set[str], dict[str, int]]:
     ids: set[str] = set()
+    archived_session_thread_ids = archived_session_thread_ids or set()
     counts = {
         "cwd_prefix_threads": 0,
         "missing_user_event_threads": 0,
@@ -910,6 +912,7 @@ def query_visibility_candidates(
 
     if "cwd" in columns:
         cwd_ids = query_id_set(conn, "SELECT id FROM threads WHERE cwd LIKE '\\\\?\\%'")
+        cwd_ids -= archived_session_thread_ids
         counts["cwd_prefix_threads"] = len(cwd_ids)
         ids |= cwd_ids
 
@@ -923,6 +926,7 @@ def query_visibility_candidates(
               AND COALESCE(TRIM(first_user_message), '') <> ''
             """,
         )
+        user_event_ids -= archived_session_thread_ids
         counts["missing_user_event_threads"] = len(user_event_ids)
         ids |= user_event_ids
 
@@ -931,6 +935,7 @@ def query_visibility_candidates(
             conn,
             f"SELECT id FROM threads WHERE {archived_visibility_repair_condition(columns)}",
         )
+        archived_ids -= archived_session_thread_ids
         counts["archived_threads"] = len(archived_ids)
         ids |= archived_ids
 
@@ -1267,7 +1272,7 @@ def iter_session_paths(paths: Paths) -> list[Path]:
 
 
 def parse_session_record(path: Path) -> SessionRecord | None:
-    if not SESSION_FILENAME_PATTERN.search(path.name):
+    if not path.name.startswith("rollout-") or path.suffix != ".jsonl":
         return None
 
     with path.open("r", encoding="utf-8", newline="") as handle:
@@ -1314,6 +1319,17 @@ def scan_session_records(paths: Paths) -> list[SessionRecord]:
         if record:
             records.append(record)
     return records
+
+
+def scan_archived_session_thread_ids(paths: Paths) -> set[str]:
+    if not paths.archived_sessions_dir.exists():
+        return set()
+    ids: set[str] = set()
+    for path in sorted(paths.archived_sessions_dir.rglob("rollout-*.jsonl")):
+        record = parse_session_record(path)
+        if record:
+            ids.add(record.thread_id)
+    return ids
 
 
 def scan_session_meta_stats(
@@ -1492,6 +1508,7 @@ def restore_metadata(paths: Paths, backup_path: Path) -> dict[str, object]:
 def rebuild_session_index(paths: Paths, conn: sqlite3.Connection) -> dict[str, int]:
     started_at = time.monotonic()
     existing_entries = read_session_index(paths)
+    archived_session_thread_ids = scan_archived_session_thread_ids(paths)
     columns = get_thread_columns(conn)
     select_parts = ["id"]
     if "title" in columns:
@@ -1525,7 +1542,11 @@ def rebuild_session_index(paths: Paths, conn: sqlite3.Connection) -> dict[str, i
 
     preserved_index_only_entries = 0
     for thread_id, entry in existing_entries.items():
-        if thread_id not in db_ids and thread_id not in known_thread_ids:
+        if (
+            thread_id not in db_ids
+            and thread_id not in known_thread_ids
+            and thread_id not in archived_session_thread_ids
+        ):
             merged.append(entry)
             preserved_index_only_entries += 1
 
@@ -1646,6 +1667,7 @@ def update_provider_assignments(
 ) -> dict[str, object]:
     started_at = time.monotonic()
     last_error: sqlite3.OperationalError | None = None
+    archived_session_thread_ids = scan_archived_session_thread_ids(paths)
 
     for attempt in range(1, WRITE_LOCK_RETRY_LIMIT + 1):
         try:
@@ -1663,7 +1685,21 @@ def update_provider_assignments(
                     "normalized_cwd": 0,
                     "set_has_user_event": 0,
                     "unarchived": 0,
+                    "archived_from_files": 0,
                 }
+                active_archived_file_ids: set[str] = set()
+                if archived_session_thread_ids and "archived" in columns:
+                    placeholders = ",".join("?" for _ in archived_session_thread_ids)
+                    active_archived_file_ids = query_id_set(
+                        conn,
+                        f"""
+                        SELECT id
+                        FROM threads
+                        WHERE COALESCE(archived, 0) = 0
+                          AND id IN ({placeholders})
+                        """,
+                        tuple(sorted(archived_session_thread_ids)),
+                    )
                 set_parts = ["model_provider = ?"]
                 set_params = [current_provider]
                 where_parts = ["model_provider IS NULL OR model_provider <> ?"]
@@ -1688,12 +1724,35 @@ def update_provider_assignments(
                     archived_set_parts = ["archived = 0"]
                     if "archived_at" in columns:
                         archived_set_parts.append("archived_at = NULL")
+                    archived_where = archived_visibility_repair_condition(columns)
+                    archived_params: tuple[object, ...] = ()
+                    if archived_session_thread_ids:
+                        placeholders = ",".join("?" for _ in archived_session_thread_ids)
+                        archived_where = f"({archived_where}) AND id NOT IN ({placeholders})"
+                        archived_params = tuple(sorted(archived_session_thread_ids))
                     visibility_updates["unarchived"] = conn.execute(
                         f"""
                         UPDATE threads
                         SET {", ".join(archived_set_parts)}
-                        WHERE {archived_visibility_repair_condition(columns)}
-                        """
+                        WHERE {archived_where}
+                        """,
+                        archived_params,
+                    ).rowcount
+
+                if active_archived_file_ids:
+                    placeholders = ",".join("?" for _ in active_archived_file_ids)
+                    archived_set_parts = ["archived = 1"]
+                    archived_params: list[object] = []
+                    if "archived_at" in columns:
+                        archived_set_parts.append("archived_at = ?")
+                        archived_params.append(int(time.time()))
+                    visibility_updates["archived_from_files"] = conn.execute(
+                        f"""
+                        UPDATE threads
+                        SET {", ".join(archived_set_parts)}
+                        WHERE id IN ({placeholders})
+                        """,
+                        (*archived_params, *sorted(active_archived_file_ids)),
                     ).rowcount
 
                 if "cwd" in columns:
@@ -1822,6 +1881,7 @@ def get_status(paths: Paths) -> dict[str, object]:
             for record in session_records
             if current_provider and record.model_provider != current_provider
         }
+        archived_session_ids = scan_archived_session_thread_ids(paths)
         model_counts = query_model_counts(conn) if "model" in columns else OrderedDict()
         provider_model_counts = query_provider_model_counts(conn) if "model" in columns else []
         cwd_counts = query_cwd_counts(conn) if "cwd" in columns else []
@@ -1843,11 +1903,14 @@ def get_status(paths: Paths) -> dict[str, object]:
                 str(row["id"])
                 for row in conn.execute(f"SELECT id FROM threads WHERE {model_where_sql}", (current_model,))
             }
-        visibility_pending_ids, visibility_counts = query_visibility_candidates(conn, columns)
+        visibility_pending_ids, visibility_counts = query_visibility_candidates(conn, columns, archived_session_ids)
         db_thread_query = "SELECT id FROM threads WHERE archived = 0" if "archived" in columns else "SELECT id FROM threads"
         db_thread_ids = {str(row["id"]) for row in conn.execute(db_thread_query)}
+        archived_index_mismatch_ids = (db_thread_ids & archived_session_ids) | (
+            set(index_entries) & archived_session_ids
+        )
         missing_index_ids = db_thread_ids - set(index_entries) if should_check_index else set()
-        db_movable_ids = provider_pending_ids | model_pending_ids | visibility_pending_ids
+        db_movable_ids = provider_pending_ids | model_pending_ids | visibility_pending_ids | archived_index_mismatch_ids
         db_pending_ids = db_movable_ids | missing_index_ids
         session_pending_ids = session_movable_ids | session_meta_stats.provider_mismatched_thread_ids
 
@@ -1874,6 +1937,8 @@ def get_status(paths: Paths) -> dict[str, object]:
         "visibility_movable_threads": len(visibility_pending_ids),
         "visibility_movable_thread_ids": sorted(visibility_pending_ids),
         **visibility_counts,
+        "archived_index_mismatch_threads": len(archived_index_mismatch_ids),
+        "archived_index_mismatch_thread_ids": sorted(archived_index_mismatch_ids),
         "movable_session_threads": len(session_movable_ids),
         "movable_session_thread_ids": sorted(session_pending_ids),
         "movable_session_meta_entries": session_meta_stats.mismatched_entries,

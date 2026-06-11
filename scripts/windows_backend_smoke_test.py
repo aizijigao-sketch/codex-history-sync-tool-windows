@@ -89,7 +89,7 @@ def create_fixture(codex_home: Path) -> None:
                 ),
                 (
                     "thread-hidden",
-                    "Hidden by visibility flags",
+                    "Archived hidden by visibility flags",
                     "old-provider",
                     "old-model",
                     r"\\?\C:\work\hidden",
@@ -100,16 +100,40 @@ def create_fixture(codex_home: Path) -> None:
                     "hidden hello",
                 ),
                 (
+                    "thread-hidden-active-file",
+                    "Active file hidden by visibility flags",
+                    "old-provider",
+                    "old-model",
+                    r"\\?\C:\work\hidden-active",
+                    5,
+                    1,
+                    23456,
+                    0,
+                    "hidden active hello",
+                ),
+                (
                     "thread-user-archived",
                     "User archived",
                     "old-provider",
                     "old-model",
                     "C:/work/user-archived",
-                    5,
+                    6,
                     1,
                     67890,
                     1,
                     "archived hello",
+                ),
+                (
+                    "thread-archive-drift",
+                    "Archived file but active index",
+                    "old-provider",
+                    "old-model",
+                    "C:/work/archive-drift",
+                    7,
+                    0,
+                    None,
+                    1,
+                    "archive drift hello",
                 ),
             ],
         )
@@ -129,6 +153,9 @@ def create_fixture(codex_home: Path) -> None:
     )
     write_session_meta(codex_home, "thread-old", "old-provider", "old-model")
     write_session_meta(codex_home, "thread-hidden", "old-provider", "old-model", folder="archived_sessions")
+    write_session_meta(codex_home, "thread-hidden-active-file", "old-provider", "old-model")
+    write_session_meta(codex_home, "thread-archive-drift", "old-provider", "old-model", folder="archived_sessions")
+    write_session_meta(codex_home, "thread-archived-index-only", "old-provider", "old-model", folder="archived_sessions")
     (codex_home / "session_index.jsonl").write_text(
         json.dumps(
             {
@@ -142,6 +169,38 @@ def create_fixture(codex_home: Path) -> None:
         + "\n",
         encoding="utf-8",
     )
+    with (codex_home / "session_index.jsonl").open("a", encoding="utf-8") as handle:
+        handle.write(
+            json.dumps(
+                {
+                    "id": "thread-archive-drift",
+                    "thread_name": "Archived file but active index",
+                    "updated_at": "2026-06-06T00:00:01Z",
+                },
+                separators=(",", ":"),
+            )
+            + "\n"
+        )
+        handle.write(
+            json.dumps(
+                {
+                    "id": "thread-archived-index-only",
+                    "thread_name": "Archived index only",
+                    "updated_at": "2026-06-06T00:00:02Z",
+                },
+                separators=(",", ":"),
+            )
+            + "\n"
+        )
+
+
+def read_session_index_ids(codex_home: Path) -> set[str]:
+    index_path = codex_home / "session_index.jsonl"
+    return {
+        json.loads(line)["id"]
+        for line in index_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    }
 
 
 def write_session_meta(codex_home: Path, thread_id: str, provider: str, model: str, folder: str = "sessions") -> None:
@@ -230,6 +289,8 @@ def main() -> int:
             raise AssertionError("Current provider detection failed")
         if int(status_before["movable_threads"]) <= 0:
             raise AssertionError("Fixture should have one movable thread")
+        if int(status_before["archived_index_mismatch_threads"]) != 2:
+            raise AssertionError("Fixture should report two archived index mismatches")
 
         manual_backup = run_backend(codex_home, "backup")
         backup_path = Path(manual_backup["backup_path"])
@@ -257,16 +318,24 @@ def main() -> int:
         hidden_cwd, hidden_user_event, hidden_archived, hidden_archived_at = thread_visibility_for(
             codex_home, "thread-hidden"
         )
+        if hidden_archived != 1 or hidden_archived_at is None:
+            raise AssertionError("Sync should keep files in archived_sessions archived")
+        hidden_active_cwd, hidden_active_user_event, hidden_active_archived, hidden_active_archived_at = (
+            thread_visibility_for(codex_home, "thread-hidden-active-file")
+        )
         if (
-            hidden_cwd != "C:\\work\\hidden"
-            or hidden_user_event != 1
-            or hidden_archived != 0
-            or hidden_archived_at is not None
+            hidden_active_cwd != "C:\\work\\hidden-active"
+            or hidden_active_user_event != 1
+            or hidden_active_archived != 0
+            or hidden_active_archived_at is not None
         ):
-            raise AssertionError("Sync did not repair hidden thread visibility flags")
+            raise AssertionError("Sync did not repair hidden active-file thread visibility flags")
         user_archived = thread_visibility_for(codex_home, "thread-user-archived")
         if user_archived != ("C:/work/user-archived", 1, 1, 67890):
             raise AssertionError("Sync should not unarchive a normal user-archived thread")
+        drift = thread_visibility_for(codex_home, "thread-archive-drift")
+        if drift[2] != 1 or drift[3] is None:
+            raise AssertionError("Sync should mark archived session files as archived in the database")
         index_rows = [
             json.loads(line)
             for line in (codex_home / "session_index.jsonl").read_text(encoding="utf-8").splitlines()
@@ -275,6 +344,13 @@ def main() -> int:
         current_index = next((row for row in index_rows if row.get("id") == "thread-current"), None)
         if current_index is None or current_index.get("extra_field") != "keep-me":
             raise AssertionError("Rebuilt session_index.jsonl did not preserve unknown fields")
+        if "thread-archive-drift" in read_session_index_ids(codex_home):
+            raise AssertionError("Rebuilt session_index.jsonl should exclude archived session files")
+        if "thread-archived-index-only" in read_session_index_ids(codex_home):
+            raise AssertionError("Rebuilt session_index.jsonl should exclude archived index-only files")
+        status_after_sync = run_backend(codex_home, "status")
+        if int(status_after_sync["archived_index_mismatch_threads"]) != 0:
+            raise AssertionError("Sync should leave no archived index mismatches after one run")
 
         repair_result = run_backend(codex_home, "project-repair")
         state = read_global_state(codex_home)
