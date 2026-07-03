@@ -1997,7 +1997,11 @@ def make_backup(paths: Paths, label: str) -> Path:
     return backup_path
 
 
-def sync_to_current_provider(paths: Paths, create_backup: bool = True) -> dict[str, object]:
+def sync_to_current_provider(
+    paths: Paths,
+    create_backup: bool = True,
+    max_rounds: int = 3,
+) -> dict[str, object]:
     total_started_at = time.monotonic()
     status_before = get_status(paths)
     current_provider = str(status_before["current_provider"])
@@ -2013,17 +2017,57 @@ def sync_to_current_provider(paths: Paths, create_backup: bool = True) -> dict[s
         backup_path = make_backup(paths, "pre-sync")
         backup_duration_ms = elapsed_ms(backup_started_at)
 
-    db_summary = update_provider_assignments(paths, current_provider, current_model)
-    session_summary = sync_session_records(paths, current_provider, current_model)
+    if max_rounds < 1:
+        raise RuntimeError("max_rounds must be at least 1")
 
-    with connect_db(paths.db_path, readonly=True) as conn:
-        index_summary = rebuild_session_index(paths, conn)
+    rounds: list[dict[str, object]] = []
+    db_summary: dict[str, object] | None = None
+    session_summary: dict[str, object] | None = None
+    index_summary: dict[str, int] | None = None
+    status_after: dict[str, object] | None = None
 
-    status_after = get_status(paths)
+    for round_number in range(1, max_rounds + 1):
+        round_started_at = time.monotonic()
+        db_summary = update_provider_assignments(paths, current_provider, current_model)
+        session_summary = sync_session_records(paths, current_provider, current_model)
+
+        with connect_db(paths.db_path, readonly=True) as conn:
+            index_summary = rebuild_session_index(paths, conn)
+
+        status_after = get_status(paths)
+        remaining_database = int(status_after.get("movable_database_threads") or 0)
+        remaining_session_entries = int(status_after.get("movable_session_meta_entries") or 0)
+        remaining_missing_index = int(status_after.get("missing_session_index_entries") or 0)
+        skipped_busy_files = int(session_summary.get("skipped_busy_session_files") or 0)
+        remaining_total = remaining_database + remaining_session_entries + remaining_missing_index
+        rounds.append(
+            {
+                "round": round_number,
+                "updated_rows": db_summary["updated_rows"],
+                "updated_session_files": session_summary["updated_session_files"],
+                "updated_session_meta_entries": session_summary["updated_session_meta_entries"],
+                "skipped_busy_session_files": skipped_busy_files,
+                "rewritten_index_entries": index_summary["rewritten_index_entries"],
+                "remaining_database_threads": remaining_database,
+                "remaining_session_meta_entries": remaining_session_entries,
+                "remaining_missing_session_index_entries": remaining_missing_index,
+                "duration_ms": elapsed_ms(round_started_at),
+            }
+        )
+        if remaining_total <= 0 and skipped_busy_files <= 0:
+            break
+        if skipped_busy_files > 0 and round_number >= max_rounds:
+            break
+
+    if db_summary is None or session_summary is None or index_summary is None or status_after is None:
+        raise RuntimeError("Sync did not run any repair round.")
+
     return {
         "action": "sync",
         "current_provider": current_provider,
         "current_model": current_model,
+        "sync_rounds": len(rounds),
+        "rounds": rounds,
         "synced_fields": db_summary["synced_fields"],
         "updated_rows": db_summary["updated_rows"],
         "visibility_updates": db_summary["visibility_updates"],
@@ -2099,12 +2143,23 @@ def restore_backup(paths: Paths, backup_path: str | None) -> dict[str, object]:
     with connect_db(paths.db_path, readonly=True) as conn:
         index_summary = rebuild_session_index(paths, conn)
 
-    status_after = get_status(paths)
+    sync_after_restore: dict[str, object] | None = None
+    try:
+        sync_after_restore = sync_to_current_provider(paths, create_backup=False)
+        status_after = sync_after_restore["status"]
+    except RuntimeError as exc:
+        status_after = get_status(paths)
+        sync_after_restore = {
+            "ok": False,
+            "error": str(exc),
+            "status": status_after,
+        }
     return {
         "action": "restore",
         "restored_from": str(chosen_backup),
         "safety_backup": str(restore_snapshot),
         "metadata_restore": restore_summary,
+        "sync_after_restore": sync_after_restore,
         "checkpoint": restore_db_summary["checkpoint"],
         "lock_wait_ms": restore_db_summary["lock_wait_ms"],
         "lock_attempts": restore_db_summary["attempts"],

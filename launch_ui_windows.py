@@ -719,7 +719,37 @@ class WindowsSyncApp(tk.Tk):
 
     def after_restore(self, result: dict) -> None:
         self.append_log(f"恢复完成。来源备份: {result.get('restored_from')}")
-        messagebox.showinfo("恢复完成", "恢复完成。请重新打开 Codex Desktop 再看历史和项目列表。")
+        sync_after_restore = result.get("sync_after_restore") or {}
+        status = result.get("status") or {}
+        remaining = int(status.get("movable_threads") or 0)
+        session_remaining = int(status.get("movable_session_meta_entries") or 0)
+        missing_index = int(status.get("missing_session_index_entries") or 0)
+        archived_mismatch = int(status.get("archived_index_mismatch_threads") or 0)
+
+        if sync_after_restore.get("ok") is False:
+            message = (
+                "备份已恢复，但自动同步到当前通道未完成。\n\n"
+                f"原因: {sync_after_restore.get('error')}\n\n"
+                "请确认 Codex Desktop 已完全退出后，再点“一键同步到当前”。"
+            )
+            self.append_log(message)
+            messagebox.showwarning("恢复完成，但仍需同步", message)
+        elif remaining or session_remaining or missing_index or archived_mismatch:
+            message = (
+                "备份已恢复，并已尝试自动同步到当前通道，但仍有少量待处理项。\n\n"
+                f"待修复线程: {remaining}\n"
+                f"待修复 session 元数据: {session_remaining}\n"
+                f"缺失索引: {missing_index}\n"
+                f"归档索引错位: {archived_mismatch}\n\n"
+                "通常是 Codex 正在写入当前聊天或有归档会话按规则保持归档。请完全退出 Codex 后再运行一次一键同步。"
+            )
+            self.append_log(message)
+            messagebox.showwarning("恢复完成，仍有待处理项", message)
+        else:
+            rounds = sync_after_restore.get("sync_rounds") or 0
+            message = f"恢复完成，并已自动同步到当前通道。修复轮次: {rounds}\n\n重新打开 Codex Desktop 后应能看到对应历史和项目列表。"
+            self.append_log(message)
+            messagebox.showinfo("恢复完成", message)
         self.refresh_state_async()
 
     def backup_details_async(self) -> None:

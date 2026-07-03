@@ -14,6 +14,9 @@ history, credentials, tokens, API keys, or provider databases.
 - Backs up the local Codex database and sidebar metadata before write actions.
 - Synchronizes local thread provider/model metadata to the currently active
   Codex configuration.
+- Runs repeated repair rounds in one sync command until provider, metadata,
+  visibility, and sidebar index state are clean or a busy active session file
+  must be retried later.
 - Rebuilds the local session index used by the Codex sidebar.
 - Repairs local visibility flags that can make existing chats look hidden after
   provider or login switching.
@@ -34,6 +37,8 @@ history, credentials, tokens, API keys, or provider databases.
 - You switched between official ChatGPT login and a third-party/custom provider.
 - Sidebar project roots are missing or stale.
 - A repair is needed after copying or restoring Codex local state.
+- Restored backups need to be adapted to the provider/model currently selected
+  in Codex Desktop.
 
 ## What It Does Not Do
 

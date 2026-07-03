@@ -307,6 +307,10 @@ def main() -> int:
             raise AssertionError("Backup notes were not updated")
 
         sync_result = run_backend(codex_home, "sync")
+        if int(sync_result["sync_rounds"]) < 1:
+            raise AssertionError("Sync should report at least one repair round")
+        if not sync_result.get("rounds"):
+            raise AssertionError("Sync should include per-round repair diagnostics")
         if int(sync_result["updated_rows"]) < 1:
             raise AssertionError("Expected at least one database row to be updated")
         if provider_for(codex_home, "thread-old") != ("openai", "gpt-5"):
@@ -351,6 +355,10 @@ def main() -> int:
         status_after_sync = run_backend(codex_home, "status")
         if int(status_after_sync["archived_index_mismatch_threads"]) != 0:
             raise AssertionError("Sync should leave no archived index mismatches after one run")
+        if int(status_after_sync["movable_threads"]) != 0:
+            raise AssertionError("Sync should leave no pending thread/index work after one command")
+        if int(status_after_sync["movable_session_meta_entries"]) != 0:
+            raise AssertionError("Sync should leave no pending session metadata work after one command")
 
         repair_result = run_backend(codex_home, "project-repair")
         state = read_global_state(codex_home)
@@ -372,8 +380,13 @@ def main() -> int:
         restore_result = run_backend(codex_home, "restore", "--backup", str(backup_path))
         if Path(restore_result["restored_from"]) != backup_path:
             raise AssertionError("Restore did not use the selected backup")
-        if provider_for(codex_home, "thread-old") != ("old-provider", "old-model"):
-            raise AssertionError("Restore did not restore original provider/model")
+        sync_after_restore = restore_result.get("sync_after_restore") or {}
+        if sync_after_restore.get("ok") is False:
+            raise AssertionError(f"Restore follow-up sync failed: {sync_after_restore.get('error')}")
+        if int(sync_after_restore.get("sync_rounds") or 0) < 1:
+            raise AssertionError("Restore should run a follow-up sync round")
+        if provider_for(codex_home, "thread-old") != ("openai", "gpt-5"):
+            raise AssertionError("Restore did not adapt restored provider/model to the current provider")
 
         chatgpt_home = temp_root / ".codex-invalid-chatgpt"
         create_invalid_custom_fixture(chatgpt_home, chatgpt_auth=True)
@@ -415,6 +428,7 @@ def main() -> int:
             "codex_home": str(codex_home),
             "status_before_movable_threads": status_before["movable_threads"],
             "sync_updated_rows": sync_result["updated_rows"],
+            "sync_rounds": sync_result["sync_rounds"],
             "restore_from": restore_result["restored_from"],
             "final_movable_threads": final_status["movable_threads"],
         }
