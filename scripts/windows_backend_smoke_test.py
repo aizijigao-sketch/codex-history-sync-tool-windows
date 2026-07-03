@@ -11,6 +11,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 BACKEND = ROOT / "sync_backend.py"
+EXPECTED_TOOL_VERSION = "0.3.7-restore-sync-repair"
+
+sys.path.insert(0, str(ROOT))
+import sync_backend  # noqa: E402
 
 
 def run_backend(codex_home: Path, *args: str) -> dict:
@@ -278,7 +282,25 @@ def create_unresolved_provider_fixture(codex_home: Path) -> None:
         auth_path.unlink()
 
 
+def assert_release_metadata() -> None:
+    if sync_backend.TOOL_VERSION != EXPECTED_TOOL_VERSION:
+        raise AssertionError(
+            f"TOOL_VERSION should be {EXPECTED_TOOL_VERSION}, got {sync_backend.TOOL_VERSION}"
+        )
+
+    readme = (ROOT / "README.md").read_text(encoding="utf-8-sig")
+    if f"Current version: `{EXPECTED_TOOL_VERSION}`" not in readme:
+        raise AssertionError("README does not document the current tool version")
+    if readme.count("?") > 10 or "????" in readme:
+        raise AssertionError("README appears to contain replacement-question-mark mojibake")
+
+    installer = (ROOT / "installer" / "CodexHistorySyncTool.iss").read_text(encoding="utf-8-sig")
+    if f'#define MyAppVersion "{EXPECTED_TOOL_VERSION}"' not in installer:
+        raise AssertionError("Installer version does not match TOOL_VERSION")
+
+
 def main() -> int:
+    assert_release_metadata()
     temp_root = Path(tempfile.mkdtemp(prefix="codex-history-sync-smoke-"))
     codex_home = temp_root / ".codex"
     try:

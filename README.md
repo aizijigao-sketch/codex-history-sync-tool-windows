@@ -1,5 +1,7 @@
 # Codex History Sync Tool for Windows
 
+Current version: `0.3.7-restore-sync-repair`
+
 Codex History Sync Tool for Windows is a local repair utility for Codex Desktop
 history visibility issues. It helps preserve local conversation history when
 switching between official ChatGPT/OAuth login and third-party or custom API
@@ -17,6 +19,8 @@ history, credentials, tokens, API keys, or provider databases.
 - Runs repeated repair rounds in one sync command until provider, metadata,
   visibility, and sidebar index state are clean or a busy active session file
   must be retried later.
+- Runs a provider/model visibility sync after backup restore so restored chats
+  are adapted to the currently active Codex configuration immediately.
 - Rebuilds the local session index used by the Codex sidebar.
 - Repairs local visibility flags that can make existing chats look hidden after
   provider or login switching.

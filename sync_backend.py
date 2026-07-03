@@ -19,7 +19,7 @@ SESSION_FILENAME_PATTERN = re.compile(
     r"rollout-.*-(?P<id>[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$"
 )
 UTC = timezone.utc
-TOOL_VERSION = "0.3.6-archive-index-health"
+TOOL_VERSION = "0.3.7-restore-sync-repair"
 UPSTREAM_VERSION = "v0.2.5"
 DEFAULT_DB_TIMEOUT_SECONDS = 30.0
 WRITE_OPERATION_TIMEOUT_SECONDS = 0.5
