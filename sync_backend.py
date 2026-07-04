@@ -864,6 +864,18 @@ def provider_unresolved_message(error: object | None = None) -> str:
     return f"{message} 原始错误：{detail}" if detail else message
 
 
+def resolve_expected_provider(config_text: str, expected_provider: str | None) -> tuple[str, str] | None:
+    expected = (expected_provider or "").strip()
+    if not expected:
+        return None
+    if not is_model_provider_available(expected, config_text):
+        raise RuntimeError(
+            f"Expected provider \"{expected}\" is not configured in config.toml. "
+            "Refusing to sync history to a provider Codex cannot load."
+        )
+    return expected, "expected-provider"
+
+
 def count_mismatched(conn: sqlite3.Connection, column: str, expected: str | None) -> int | None:
     if expected is None:
         return None
@@ -1850,7 +1862,7 @@ def restore_database_with_retry(paths: Paths, chosen_backup: Path) -> dict[str, 
     raise RuntimeError("Database restore retry loop ended unexpectedly.") from last_error
 
 
-def get_status(paths: Paths) -> dict[str, object]:
+def get_status(paths: Paths, expected_provider: str | None = None) -> dict[str, object]:
     ensure_environment(paths)
     config_text = read_text(paths.config_path)
     current_model = parse_current_model(config_text)
@@ -1868,7 +1880,11 @@ def get_status(paths: Paths) -> dict[str, object]:
         counts = query_provider_counts(conn)
         provider_resolution_error = ""
         try:
-            current_provider, current_provider_source = resolve_current_provider(paths, config_text, conn, current_model)
+            expected_resolution = resolve_expected_provider(config_text, expected_provider)
+            if expected_resolution:
+                current_provider, current_provider_source = expected_resolution
+            else:
+                current_provider, current_provider_source = resolve_current_provider(paths, config_text, conn, current_model)
         except RuntimeError as exc:
             current_provider = ""
             current_provider_source = "unresolved"
@@ -2001,9 +2017,10 @@ def sync_to_current_provider(
     paths: Paths,
     create_backup: bool = True,
     max_rounds: int = 3,
+    expected_provider: str | None = None,
 ) -> dict[str, object]:
     total_started_at = time.monotonic()
-    status_before = get_status(paths)
+    status_before = get_status(paths, expected_provider=expected_provider)
     current_provider = str(status_before["current_provider"])
     if not current_provider.strip():
         raise RuntimeError(str(status_before.get("provider_resolution_error") or provider_unresolved_message()))
@@ -2034,7 +2051,7 @@ def sync_to_current_provider(
         with connect_db(paths.db_path, readonly=True) as conn:
             index_summary = rebuild_session_index(paths, conn)
 
-        status_after = get_status(paths)
+        status_after = get_status(paths, expected_provider=expected_provider)
         remaining_database = int(status_after.get("movable_database_threads") or 0)
         remaining_session_entries = int(status_after.get("movable_session_meta_entries") or 0)
         remaining_missing_index = int(status_after.get("missing_session_index_entries") or 0)
@@ -2227,6 +2244,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Codex history sync helper")
     parser.add_argument("--codex-home", help="Override Codex home directory")
     parser.add_argument("--json", action="store_true", help="Emit JSON output")
+    parser.add_argument("--expected-provider", help="Require status/sync to target this configured provider")
     parser.add_argument("--one-click-safe-sync", action="store_true", help="Run launcher-compatible one-click safe backup and repair")
     parser.add_argument("--mode", choices=ONE_CLICK_MODES, default="auto", help="One-click mode")
     parser.add_argument("--close-codex", action="store_true", help="Close Codex Desktop before one-click repair")
@@ -2284,9 +2302,9 @@ def main() -> int:
 
     try:
         if args.command == "status":
-            payload = get_status(paths)
+            payload = get_status(paths, expected_provider=args.expected_provider)
         elif args.command == "sync":
-            payload = sync_to_current_provider(paths)
+            payload = sync_to_current_provider(paths, expected_provider=args.expected_provider)
         elif args.command == "restore":
             payload = restore_backup(paths, args.backup)
         elif args.command == "backup":
