@@ -1,6 +1,14 @@
 # Codex History Sync Tool for Windows
 
-Current version: `0.3.8-autosync-provider-guard`
+Current source version: `0.3.8-autosync-provider-guard`
+
+Latest Windows installer release: `v0.3.8-autosync-provider-guard`
+
+Download:
+[`Codex-History-Sync-Tool-0.3.8-autosync-provider-guard-Setup.exe`](https://github.com/aizijigao-sketch/codex-history-sync-tool-windows/releases/download/v0.3.8-autosync-provider-guard/Codex-History-Sync-Tool-0.3.8-autosync-provider-guard-Setup.exe)
+
+Release page:
+[`v0.3.8-autosync-provider-guard`](https://github.com/aizijigao-sketch/codex-history-sync-tool-windows/releases/tag/v0.3.8-autosync-provider-guard)
 
 Codex History Sync Tool for Windows is a local repair utility for Codex Desktop
 history visibility issues. It helps preserve local conversation history when
