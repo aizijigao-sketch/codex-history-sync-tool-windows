@@ -1,5 +1,7 @@
 # Codex History Sync Tool for Windows
 
+[English](README.md) | [中文](README.zh-CN.md)
+
 Current source version: `0.3.8-autosync-provider-guard`
 
 Latest Windows installer release: `v0.3.8-autosync-provider-guard`
@@ -18,13 +20,8 @@ provider configurations.
 The tool works only on local Codex Desktop data. It does not upload chat
 history, credentials, tokens, API keys, or provider databases.
 
-## Languages / 语言
 
-This README uses English as the primary public documentation language.
-
-中文快速说明：本工具用于修复 Windows 版 Codex Desktop 的本地聊天可见性、provider/model metadata、侧栏索引、归档索引和项目列表。它只处理本机 Codex 数据，不上传聊天记录，不迁移 `auth.json`、token、API key、OAuth refresh token 或第三方 key 管理器数据库。
-
-## Relationship With Codex Windows Launcher / 与启动器的关系
+## Relationship With Codex Windows Launcher
 
 This project is the history repair companion for
 [`codex-windows-launcher`](https://github.com/aizijigao-sketch/codex-windows-launcher).
