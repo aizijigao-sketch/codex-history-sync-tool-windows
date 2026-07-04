@@ -1,6 +1,6 @@
 # Codex History Sync Tool for Windows
 
-Current version: `0.3.7-restore-sync-repair`
+Current version: `0.3.8-autosync-provider-guard`
 
 Codex History Sync Tool for Windows is a local repair utility for Codex Desktop
 history visibility issues. It helps preserve local conversation history when
@@ -29,6 +29,11 @@ history, credentials, tokens, API keys, or provider databases.
   so they are not promoted into permanent sidebar projects.
 - Provides a Windows desktop launcher and optional low-frequency Windows
   auto-sync watcher.
+- Lets launchers pass `--expected-provider` so status and sync can require a
+  specific configured provider instead of silently trusting whichever provider
+  is active at that moment.
+- Persists Windows auto-sync settings for detect-only mode, chat repair,
+  project repair, and dual-home repair.
 - Reports auto-sync health issues such as stale watcher locks or old logs.
 - Skips temporarily busy active session files during background repair instead
   of failing the whole watcher run.
@@ -87,6 +92,13 @@ Sync local history to the active provider:
 py -3 .\sync_backend.py --json sync
 ```
 
+Sync local history only when the active configuration can target an expected
+provider:
+
+```powershell
+py -3 .\sync_backend.py --json --expected-provider custom sync
+```
+
 Repair project roots:
 
 ```powershell
@@ -97,6 +109,14 @@ Launcher-compatible one-click safe repair:
 
 ```powershell
 py -3 .\sync_backend.py --json --one-click-safe-sync --mode auto --close-codex --backup --fix-projects --no-credentials --merge-global-state
+```
+
+Windows auto-sync task controls:
+
+```powershell
+py -3 .\scripts\windows_task_scheduler.py install --json
+py -3 .\scripts\windows_task_scheduler.py status --json
+py -3 .\scripts\windows_task_scheduler.py uninstall --json
 ```
 
 ## Build

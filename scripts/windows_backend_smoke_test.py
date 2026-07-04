@@ -11,7 +11,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 BACKEND = ROOT / "sync_backend.py"
-EXPECTED_TOOL_VERSION = "0.3.7-restore-sync-repair"
+EXPECTED_TOOL_VERSION = "0.3.8-autosync-provider-guard"
 
 sys.path.insert(0, str(ROOT))
 import sync_backend  # noqa: E402
@@ -271,6 +271,26 @@ def create_invalid_custom_fixture(codex_home: Path, chatgpt_auth: bool) -> None:
     write_session_meta(codex_home, "thread-old", "custom", "gpt-5")
 
 
+def create_preserve_auth_custom_fixture(codex_home: Path) -> None:
+    create_fixture(codex_home)
+    (codex_home / "config.toml").write_text(
+        "\n".join(
+            [
+                'model_provider = "custom"',
+                'model = "gpt-5"',
+                "",
+                "[model_providers.custom]",
+                'name = "CCSwitch Local Route"',
+                'base_url = "http://127.0.0.1:15721/v1"',
+                "requires_openai_auth = true",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (codex_home / "auth.json").write_text(json.dumps({"auth_mode": "chatgpt"}), encoding="utf-8")
+
+
 def create_unresolved_provider_fixture(codex_home: Path) -> None:
     create_fixture(codex_home)
     (codex_home / "config.toml").write_text('model = "gpt-5"\n', encoding="utf-8")
@@ -441,6 +461,18 @@ def main() -> int:
             raise AssertionError("Unresolved provider sync should fail instead of writing empty provider")
         if "当前无法判断 Codex 正在使用哪个 provider" not in str(unresolved_sync.get("error")):
             raise AssertionError("Unresolved provider sync error should be user-facing Chinese")
+
+        preserve_home = temp_root / ".codex-preserve-auth"
+        create_preserve_auth_custom_fixture(preserve_home)
+        expected_status = run_backend(preserve_home, "--expected-provider", "custom", "status")
+        if expected_status["current_provider"] != "custom":
+            raise AssertionError("Expected-provider status should prefer configured custom provider over ChatGPT auth")
+        expected_sync = run_backend(preserve_home, "--expected-provider", "custom", "sync")
+        if expected_sync["current_provider"] != "custom":
+            raise AssertionError("Expected-provider sync should target custom provider")
+        expected_after = run_backend(preserve_home, "--expected-provider", "custom", "status")
+        if int(expected_after["movable_threads"]) != 0:
+            raise AssertionError("Expected-provider sync should leave no movable threads")
 
         final_status = run_backend(codex_home, "status")
         if not final_status.get("login_mode") or "project_diagnostics" not in final_status:
