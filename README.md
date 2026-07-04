@@ -1,189 +1,119 @@
-# Codex History Sync Tool for Windows
+﻿# Codex History Sync Tool for Windows
 
-[English](README.md) | [中文](README.zh-CN.md)
+**中文（当前）** | [English](README.en.md)
 
-Current source version: `0.3.8-autosync-provider-guard`
+当前源码版本：`0.3.8-autosync-provider-guard`
 
-Latest Windows installer release: `v0.3.8-autosync-provider-guard`
+最新 Windows 安装包：`v0.3.8-autosync-provider-guard`
 
-Download:
+下载：
 [`Codex-History-Sync-Tool-0.3.8-autosync-provider-guard-Setup.exe`](https://github.com/aizijigao-sketch/codex-history-sync-tool-windows/releases/download/v0.3.8-autosync-provider-guard/Codex-History-Sync-Tool-0.3.8-autosync-provider-guard-Setup.exe)
 
-Release page:
+Release 页面：
 [`v0.3.8-autosync-provider-guard`](https://github.com/aizijigao-sketch/codex-history-sync-tool-windows/releases/tag/v0.3.8-autosync-provider-guard)
 
-Codex History Sync Tool for Windows is a local repair utility for Codex Desktop
-history visibility issues. It helps preserve local conversation history when
-switching between official ChatGPT/OAuth login and third-party or custom API
-provider configurations.
+Codex History Sync Tool for Windows 用于修复 Windows 版 Codex Desktop 的本地聊天可见性、provider/model metadata、侧栏索引、归档索引和项目列表。它适合在官方 ChatGPT/OAuth 登录态、第三方 provider、CCSwitch/custom 路由之间切换后使用。
 
-The tool works only on local Codex Desktop data. It does not upload chat
-history, credentials, tokens, API keys, or provider databases.
+本工具只处理本机 Codex Desktop 数据。它不上传聊天记录，不迁移 `auth.json`、token、API key、OAuth refresh token 或第三方 key 管理器数据库。
 
+## 与 Codex Windows 启动器的关系
 
-## Relationship With Codex Windows Launcher
+本项目是 [`codex-windows-launcher`](https://github.com/aizijigao-sketch/codex-windows-launcher) 的本地历史修复配套工具。
 
-This project is the history repair companion for
-[`codex-windows-launcher`](https://github.com/aizijigao-sketch/codex-windows-launcher).
-
-Recommended source layout on the maintainer machine:
+推荐源码放置方式：
 
 ```text
 F:\AI-Workspace\20_Projects\codex-windows-launcher
 F:\AI-Workspace\20_Projects\codex-history-sync-windows-work
 ```
 
-Responsibility split:
+职责划分：
 
-- Codex Windows Launcher starts/stops Codex Desktop and CCSwitch, switches local
-  launcher profiles, and chooses the expected provider for each menu mode.
-- Codex History Sync Tool repairs local history visibility, provider/model
-  metadata, `session_index.jsonl`, archived-session index state, and sidebar
-  project roots.
-- Launcher menu `1` expects provider `openai`; launcher menu `2` expects
-  provider `custom`.
-- The launcher can call this backend before starting Codex:
+- Codex Windows 启动器负责启动/关闭 Codex Desktop 和 CCSwitch、切换本地 profile、选择每个菜单期望的 provider。
+- Codex History Sync Tool 负责修复本地聊天可见性、provider/model metadata、`session_index.jsonl`、归档索引和侧栏项目列表。
+- 启动器菜单 `1` 期望 provider 为 `openai`；菜单 `2` 期望 provider 为 `custom`。
+- 启动器可以在启动 Codex 前调用本工具后端：
 
 ```powershell
 py -3 .\sync_backend.py --json --expected-provider custom sync
 ```
 
-If this tool is not installed or not discoverable, the launcher can still switch
-profiles and start Codex, but it cannot repair local history visibility.
+如果本工具未安装或启动器找不到它，启动器仍可切换 profile 并启动 Codex，但不能修复本地聊天可见性。
 
-## Required Software And Configuration
+## 需要的软件和配置
 
-For normal users:
+普通用户需要：
 
-- Windows 10/11.
-- Codex Desktop.
-- The latest installer from this repository's GitHub Releases.
-- CCSwitch only when using third-party/custom provider routing.
+- Windows 10/11。
+- Codex Desktop。
+- 本仓库 GitHub Releases 里的最新安装包。
+- CCSwitch：只有使用第三方/custom provider 路由时需要。
 
-For source usage or development:
+源码使用或开发需要：
 
-- Python 3.
-- PowerShell.
-- PyInstaller for packaged builds.
-- Inno Setup 6 for Windows installer builds.
+- Python 3。
+- PowerShell。
+- PyInstaller：构建便携程序时需要。
+- Inno Setup 6：构建 Windows 安装包时需要。
 
-Configuration ownership:
+配置归属：
 
-- Configure official ChatGPT/OpenAI login inside Codex Desktop and your browser.
-- Configure third-party provider, model mapping, Base URL, and API key inside
-  CCSwitch or your provider tool.
-- Use Codex Windows Launcher for mode switching and launch order.
-- Use this tool for local history visibility repair and project-list repair.
+- 官方 ChatGPT/OpenAI 登录在 Codex Desktop 和浏览器里完成。
+- 第三方 provider、模型映射、Base URL 和 API key 在 CCSwitch 或你的 provider 工具里配置。
+- 模式切换和启动顺序交给 Codex Windows 启动器。
+- 本工具只负责本地历史可见性修复和项目列表修复。
 
-Do not configure or copy:
+不要配置或复制：
 
-- Do not copy `auth.json`, `.codex`, `.cc-switch`, OAuth tokens, API keys,
-  refresh tokens, or provider databases between computers.
-- Do not publish real `state_5.sqlite`, `session_index.jsonl`, `sessions`,
-  backup directories, screenshots, logs, or private investigation notes.
+- 不要跨电脑复制 `auth.json`、`.codex`、`.cc-switch`、OAuth token、API key、refresh token 或 provider 数据库。
+- 不要发布真实 `state_5.sqlite`、`session_index.jsonl`、`sessions`、备份目录、截图、日志或私有排查记录。
 
-## What It Does
+## 功能
 
-- Shows the current Codex provider, model, thread counts, and project state.
-- Backs up the local Codex database and sidebar metadata before write actions.
-- Synchronizes local thread provider/model metadata to the currently active
-  Codex configuration.
-- Runs repeated repair rounds in one sync command until provider, metadata,
-  visibility, and sidebar index state are clean or a busy active session file
-  must be retried later.
-- Runs a provider/model visibility sync after backup restore so restored chats
-  are adapted to the currently active Codex configuration immediately.
-- Rebuilds the local session index used by the Codex sidebar.
-- Repairs local visibility flags that can make existing chats look hidden after
-  provider or login switching.
-- Repairs project roots shown in the Codex sidebar.
-- Filters transient Codex work directories such as dated temporary workspaces
-  so they are not promoted into permanent sidebar projects.
-- Provides a Windows desktop launcher and optional low-frequency Windows
-  auto-sync watcher.
-- Lets launchers pass `--expected-provider` so status and sync can require a
-  specific configured provider instead of silently trusting whichever provider
-  is active at that moment.
-- Persists Windows auto-sync settings for detect-only mode, chat repair,
-  project repair, and dual-home repair.
-- Reports auto-sync health issues such as stale watcher locks or old logs.
-- Skips temporarily busy active session files during background repair instead
-  of failing the whole watcher run.
-- Provides an Inno Setup installer build flow with a selectable install path.
+- 显示当前 Codex provider、模型、线程数量和项目状态。
+- 写入操作前备份本地 Codex 数据库和侧栏 metadata。
+- 将本地 thread provider/model metadata 同步到当前 Codex 配置。
+- 一次 `sync` 中多轮修复 provider、metadata、可见性和索引状态。
+- 恢复备份后自动做 provider/model 可见性同步。
+- 重建 Codex 侧栏使用的本地 `session_index.jsonl`。
+- 修复导致已有聊天看起来隐藏的本地可见性标记。
+- 修复 Codex 侧栏项目根目录。
+- 支持 Windows 桌面 GUI 和低频 auto-sync watcher。
+- 支持 `--expected-provider`，让启动器能要求同步目标必须匹配期望 provider。
 
-## Typical Use Cases
+## Windows 使用
 
-- Codex Desktop history exists locally but the sidebar looks empty after login
-  or provider switching.
-- You switched between official ChatGPT login and a third-party/custom provider.
-- Sidebar project roots are missing or stale.
-- A repair is needed after copying or restoring Codex local state.
-- Restored backups need to be adapted to the provider/model currently selected
-  in Codex Desktop.
-
-## What It Does Not Do
-
-- It does not sync cloud chat records between OpenAI accounts.
-- It does not run a high-frequency shared-chat polling service.
-- It does not migrate credentials or tokens.
-- It does not copy third-party key manager databases.
-- It does not recover local history files that were already deleted.
-- It is not a replacement for a full machine backup.
-
-## Safety Model
-
-Every write path is designed around local safety:
-
-- Backups are created before sync, restore, and project repair operations.
-- Backup manifests record metadata, but credential copying is disabled.
-- `auth.json`, OAuth tokens, API keys, refresh tokens, and third-party key
-  databases are never copied by the one-click repair flow.
-- Project repair keeps durable project roots and drops transient dated Codex
-  workspaces from sidebar project lists.
-
-Even with those safeguards, review your Codex home before using any repair tool
-against important local data.
-
-## Windows Usage
-
-From source:
+从源码启动 GUI：
 
 ```powershell
 py -3 .\launch_ui_windows.py
 ```
 
-Backend status check:
+后端状态检查：
 
 ```powershell
 py -3 .\sync_backend.py --json status
 ```
 
-Sync local history to the active provider:
+同步本地历史到当前 provider：
 
 ```powershell
 py -3 .\sync_backend.py --json sync
 ```
 
-Sync local history only when the active configuration can target an expected
-provider:
+要求 provider 匹配后再同步：
 
 ```powershell
 py -3 .\sync_backend.py --json --expected-provider custom sync
 ```
 
-Repair project roots:
+修复项目列表：
 
 ```powershell
 py -3 .\sync_backend.py --json project-repair
 ```
 
-Launcher-compatible one-click safe repair:
-
-```powershell
-py -3 .\sync_backend.py --json --one-click-safe-sync --mode auto --close-codex --backup --fix-projects --no-credentials --merge-global-state
-```
-
-Windows auto-sync task controls:
+Windows auto-sync 任务：
 
 ```powershell
 py -3 .\scripts\windows_task_scheduler.py install --json
@@ -191,53 +121,33 @@ py -3 .\scripts\windows_task_scheduler.py status --json
 py -3 .\scripts\windows_task_scheduler.py uninstall --json
 ```
 
-## Build
+## 构建
 
-Build the portable executable with PyInstaller:
+构建 PyInstaller 程序：
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build_windows_pyinstaller.ps1
 ```
 
-Build the installer with Inno Setup:
+构建 Inno Setup 安装包：
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build_windows_installer.ps1
 ```
 
-Generated artifacts are written under `dist`, `build`, and `release`; these
-directories should not be committed.
+生成产物在 `dist`、`build` 和 `release` 下，这些目录不应提交到源码仓库。
 
-## Tests
-
-Run the backend smoke test:
+## 测试
 
 ```powershell
 py -3 .\scripts\windows_backend_smoke_test.py
-```
-
-Run packaged and installer smoke tests after building:
-
-```powershell
 py -3 .\scripts\windows_packaged_app_smoke_test.py
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\windows_installer_smoke_test.ps1
 ```
 
-## Project Files
+## 隐私边界
 
-- `sync_backend.py`: backend sync, backup, restore, and repair logic.
-- `launch_ui_windows.py`: Windows GUI launcher.
-- `windows_app.py`: Windows app entry point for packaged builds.
-- `scripts/windows_auto_sync_watcher.py`: optional Windows auto-sync watcher.
-- `scripts/windows_task_scheduler.py`: Windows Task Scheduler integration.
-- `installer/CodexHistorySyncTool.iss`: Inno Setup installer script.
-- `docs/windows-upstream-sync-strategy.md`: maintenance strategy for tracking
-  upstream changes.
-
-## Privacy
-
-Do not publish local Codex data or user-specific records. In particular, keep
-these out of public repositories:
+不要把本地 Codex 数据或用户私有记录发布到公开仓库，尤其是：
 
 - `.codex`
 - `.codex-official`
@@ -247,18 +157,13 @@ these out of public repositories:
 - `auth.json`
 - `config.toml`
 - `history_sync_backups`
-- local screenshots, logs, or private investigation notes
+- 本地截图、日志或私有排查记录
 
-## Upstream
+## 上游
 
-This project is derived from MIT-licensed Codex history sync work:
+本项目派生自 MIT 许可的 Codex history sync 相关工作：
 
 - [`GODGOD126/codex-history-sync-tool`](https://github.com/GODGOD126/codex-history-sync-tool)
 - [`ruigod1/codex-history-sync-tool-mac`](https://github.com/ruigod1/codex-history-sync-tool-mac)
 
-See [OPEN_SOURCE_NOTES.md](OPEN_SOURCE_NOTES.md) for lineage and publishing
-notes.
-
-## License
-
-MIT. See [LICENSE](LICENSE).
+详见 [OPEN_SOURCE_NOTES.md](OPEN_SOURCE_NOTES.md)。
