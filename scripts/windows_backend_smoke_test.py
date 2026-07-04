@@ -11,6 +11,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 BACKEND = ROOT / "sync_backend.py"
+EXPECTED_TOOL_VERSION = "0.3.8-autosync-provider-guard"
+
+sys.path.insert(0, str(ROOT))
+import sync_backend  # noqa: E402
 
 
 def run_backend(codex_home: Path, *args: str) -> dict:
@@ -267,6 +271,26 @@ def create_invalid_custom_fixture(codex_home: Path, chatgpt_auth: bool) -> None:
     write_session_meta(codex_home, "thread-old", "custom", "gpt-5")
 
 
+def create_preserve_auth_custom_fixture(codex_home: Path) -> None:
+    create_fixture(codex_home)
+    (codex_home / "config.toml").write_text(
+        "\n".join(
+            [
+                'model_provider = "custom"',
+                'model = "gpt-5"',
+                "",
+                "[model_providers.custom]",
+                'name = "CCSwitch Local Route"',
+                'base_url = "http://127.0.0.1:15721/v1"',
+                "requires_openai_auth = true",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (codex_home / "auth.json").write_text(json.dumps({"auth_mode": "chatgpt"}), encoding="utf-8")
+
+
 def create_unresolved_provider_fixture(codex_home: Path) -> None:
     create_fixture(codex_home)
     (codex_home / "config.toml").write_text('model = "gpt-5"\n', encoding="utf-8")
@@ -278,7 +302,25 @@ def create_unresolved_provider_fixture(codex_home: Path) -> None:
         auth_path.unlink()
 
 
+def assert_release_metadata() -> None:
+    if sync_backend.TOOL_VERSION != EXPECTED_TOOL_VERSION:
+        raise AssertionError(
+            f"TOOL_VERSION should be {EXPECTED_TOOL_VERSION}, got {sync_backend.TOOL_VERSION}"
+        )
+
+    readme = (ROOT / "README.md").read_text(encoding="utf-8-sig")
+    if f"Current version: `{EXPECTED_TOOL_VERSION}`" not in readme:
+        raise AssertionError("README does not document the current tool version")
+    if readme.count("?") > 10 or "????" in readme:
+        raise AssertionError("README appears to contain replacement-question-mark mojibake")
+
+    installer = (ROOT / "installer" / "CodexHistorySyncTool.iss").read_text(encoding="utf-8-sig")
+    if f'#define MyAppVersion "{EXPECTED_TOOL_VERSION}"' not in installer:
+        raise AssertionError("Installer version does not match TOOL_VERSION")
+
+
 def main() -> int:
+    assert_release_metadata()
     temp_root = Path(tempfile.mkdtemp(prefix="codex-history-sync-smoke-"))
     codex_home = temp_root / ".codex"
     try:
@@ -307,6 +349,10 @@ def main() -> int:
             raise AssertionError("Backup notes were not updated")
 
         sync_result = run_backend(codex_home, "sync")
+        if int(sync_result["sync_rounds"]) < 1:
+            raise AssertionError("Sync should report at least one repair round")
+        if not sync_result.get("rounds"):
+            raise AssertionError("Sync should include per-round repair diagnostics")
         if int(sync_result["updated_rows"]) < 1:
             raise AssertionError("Expected at least one database row to be updated")
         if provider_for(codex_home, "thread-old") != ("openai", "gpt-5"):
@@ -351,6 +397,10 @@ def main() -> int:
         status_after_sync = run_backend(codex_home, "status")
         if int(status_after_sync["archived_index_mismatch_threads"]) != 0:
             raise AssertionError("Sync should leave no archived index mismatches after one run")
+        if int(status_after_sync["movable_threads"]) != 0:
+            raise AssertionError("Sync should leave no pending thread/index work after one command")
+        if int(status_after_sync["movable_session_meta_entries"]) != 0:
+            raise AssertionError("Sync should leave no pending session metadata work after one command")
 
         repair_result = run_backend(codex_home, "project-repair")
         state = read_global_state(codex_home)
@@ -372,8 +422,13 @@ def main() -> int:
         restore_result = run_backend(codex_home, "restore", "--backup", str(backup_path))
         if Path(restore_result["restored_from"]) != backup_path:
             raise AssertionError("Restore did not use the selected backup")
-        if provider_for(codex_home, "thread-old") != ("old-provider", "old-model"):
-            raise AssertionError("Restore did not restore original provider/model")
+        sync_after_restore = restore_result.get("sync_after_restore") or {}
+        if sync_after_restore.get("ok") is False:
+            raise AssertionError(f"Restore follow-up sync failed: {sync_after_restore.get('error')}")
+        if int(sync_after_restore.get("sync_rounds") or 0) < 1:
+            raise AssertionError("Restore should run a follow-up sync round")
+        if provider_for(codex_home, "thread-old") != ("openai", "gpt-5"):
+            raise AssertionError("Restore did not adapt restored provider/model to the current provider")
 
         chatgpt_home = temp_root / ".codex-invalid-chatgpt"
         create_invalid_custom_fixture(chatgpt_home, chatgpt_auth=True)
@@ -407,6 +462,18 @@ def main() -> int:
         if "当前无法判断 Codex 正在使用哪个 provider" not in str(unresolved_sync.get("error")):
             raise AssertionError("Unresolved provider sync error should be user-facing Chinese")
 
+        preserve_home = temp_root / ".codex-preserve-auth"
+        create_preserve_auth_custom_fixture(preserve_home)
+        expected_status = run_backend(preserve_home, "--expected-provider", "custom", "status")
+        if expected_status["current_provider"] != "custom":
+            raise AssertionError("Expected-provider status should prefer configured custom provider over ChatGPT auth")
+        expected_sync = run_backend(preserve_home, "--expected-provider", "custom", "sync")
+        if expected_sync["current_provider"] != "custom":
+            raise AssertionError("Expected-provider sync should target custom provider")
+        expected_after = run_backend(preserve_home, "--expected-provider", "custom", "status")
+        if int(expected_after["movable_threads"]) != 0:
+            raise AssertionError("Expected-provider sync should leave no movable threads")
+
         final_status = run_backend(codex_home, "status")
         if not final_status.get("login_mode") or "project_diagnostics" not in final_status:
             raise AssertionError("Status did not include login mode or project diagnostics")
@@ -415,6 +482,7 @@ def main() -> int:
             "codex_home": str(codex_home),
             "status_before_movable_threads": status_before["movable_threads"],
             "sync_updated_rows": sync_result["updated_rows"],
+            "sync_rounds": sync_result["sync_rounds"],
             "restore_from": restore_result["restored_from"],
             "final_movable_threads": final_status["movable_threads"],
         }

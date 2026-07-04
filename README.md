@@ -1,5 +1,7 @@
 # Codex History Sync Tool for Windows
 
+Current version: `0.3.8-autosync-provider-guard`
+
 Codex History Sync Tool for Windows is a local repair utility for Codex Desktop
 history visibility issues. It helps preserve local conversation history when
 switching between official ChatGPT/OAuth login and third-party or custom API
@@ -14,6 +16,11 @@ history, credentials, tokens, API keys, or provider databases.
 - Backs up the local Codex database and sidebar metadata before write actions.
 - Synchronizes local thread provider/model metadata to the currently active
   Codex configuration.
+- Runs repeated repair rounds in one sync command until provider, metadata,
+  visibility, and sidebar index state are clean or a busy active session file
+  must be retried later.
+- Runs a provider/model visibility sync after backup restore so restored chats
+  are adapted to the currently active Codex configuration immediately.
 - Rebuilds the local session index used by the Codex sidebar.
 - Repairs local visibility flags that can make existing chats look hidden after
   provider or login switching.
@@ -22,6 +29,11 @@ history, credentials, tokens, API keys, or provider databases.
   so they are not promoted into permanent sidebar projects.
 - Provides a Windows desktop launcher and optional low-frequency Windows
   auto-sync watcher.
+- Lets launchers pass `--expected-provider` so status and sync can require a
+  specific configured provider instead of silently trusting whichever provider
+  is active at that moment.
+- Persists Windows auto-sync settings for detect-only mode, chat repair,
+  project repair, and dual-home repair.
 - Reports auto-sync health issues such as stale watcher locks or old logs.
 - Skips temporarily busy active session files during background repair instead
   of failing the whole watcher run.
@@ -34,6 +46,8 @@ history, credentials, tokens, API keys, or provider databases.
 - You switched between official ChatGPT login and a third-party/custom provider.
 - Sidebar project roots are missing or stale.
 - A repair is needed after copying or restoring Codex local state.
+- Restored backups need to be adapted to the provider/model currently selected
+  in Codex Desktop.
 
 ## What It Does Not Do
 
@@ -78,6 +92,13 @@ Sync local history to the active provider:
 py -3 .\sync_backend.py --json sync
 ```
 
+Sync local history only when the active configuration can target an expected
+provider:
+
+```powershell
+py -3 .\sync_backend.py --json --expected-provider custom sync
+```
+
 Repair project roots:
 
 ```powershell
@@ -88,6 +109,14 @@ Launcher-compatible one-click safe repair:
 
 ```powershell
 py -3 .\sync_backend.py --json --one-click-safe-sync --mode auto --close-codex --backup --fix-projects --no-credentials --merge-global-state
+```
+
+Windows auto-sync task controls:
+
+```powershell
+py -3 .\scripts\windows_task_scheduler.py install --json
+py -3 .\scripts\windows_task_scheduler.py status --json
+py -3 .\scripts\windows_task_scheduler.py uninstall --json
 ```
 
 ## Build

@@ -19,7 +19,7 @@ SESSION_FILENAME_PATTERN = re.compile(
     r"rollout-.*-(?P<id>[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$"
 )
 UTC = timezone.utc
-TOOL_VERSION = "0.3.6-archive-index-health"
+TOOL_VERSION = "0.3.8-autosync-provider-guard"
 UPSTREAM_VERSION = "v0.2.5"
 DEFAULT_DB_TIMEOUT_SECONDS = 30.0
 WRITE_OPERATION_TIMEOUT_SECONDS = 0.5
@@ -862,6 +862,18 @@ def provider_unresolved_message(error: object | None = None) -> str:
         "如果只是想保留现场，可以先手动备份。"
     )
     return f"{message} 原始错误：{detail}" if detail else message
+
+
+def resolve_expected_provider(config_text: str, expected_provider: str | None) -> tuple[str, str] | None:
+    expected = (expected_provider or "").strip()
+    if not expected:
+        return None
+    if not is_model_provider_available(expected, config_text):
+        raise RuntimeError(
+            f"Expected provider \"{expected}\" is not configured in config.toml. "
+            "Refusing to sync history to a provider Codex cannot load."
+        )
+    return expected, "expected-provider"
 
 
 def count_mismatched(conn: sqlite3.Connection, column: str, expected: str | None) -> int | None:
@@ -1850,7 +1862,7 @@ def restore_database_with_retry(paths: Paths, chosen_backup: Path) -> dict[str, 
     raise RuntimeError("Database restore retry loop ended unexpectedly.") from last_error
 
 
-def get_status(paths: Paths) -> dict[str, object]:
+def get_status(paths: Paths, expected_provider: str | None = None) -> dict[str, object]:
     ensure_environment(paths)
     config_text = read_text(paths.config_path)
     current_model = parse_current_model(config_text)
@@ -1868,7 +1880,11 @@ def get_status(paths: Paths) -> dict[str, object]:
         counts = query_provider_counts(conn)
         provider_resolution_error = ""
         try:
-            current_provider, current_provider_source = resolve_current_provider(paths, config_text, conn, current_model)
+            expected_resolution = resolve_expected_provider(config_text, expected_provider)
+            if expected_resolution:
+                current_provider, current_provider_source = expected_resolution
+            else:
+                current_provider, current_provider_source = resolve_current_provider(paths, config_text, conn, current_model)
         except RuntimeError as exc:
             current_provider = ""
             current_provider_source = "unresolved"
@@ -1997,9 +2013,14 @@ def make_backup(paths: Paths, label: str) -> Path:
     return backup_path
 
 
-def sync_to_current_provider(paths: Paths, create_backup: bool = True) -> dict[str, object]:
+def sync_to_current_provider(
+    paths: Paths,
+    create_backup: bool = True,
+    max_rounds: int = 3,
+    expected_provider: str | None = None,
+) -> dict[str, object]:
     total_started_at = time.monotonic()
-    status_before = get_status(paths)
+    status_before = get_status(paths, expected_provider=expected_provider)
     current_provider = str(status_before["current_provider"])
     if not current_provider.strip():
         raise RuntimeError(str(status_before.get("provider_resolution_error") or provider_unresolved_message()))
@@ -2013,17 +2034,57 @@ def sync_to_current_provider(paths: Paths, create_backup: bool = True) -> dict[s
         backup_path = make_backup(paths, "pre-sync")
         backup_duration_ms = elapsed_ms(backup_started_at)
 
-    db_summary = update_provider_assignments(paths, current_provider, current_model)
-    session_summary = sync_session_records(paths, current_provider, current_model)
+    if max_rounds < 1:
+        raise RuntimeError("max_rounds must be at least 1")
 
-    with connect_db(paths.db_path, readonly=True) as conn:
-        index_summary = rebuild_session_index(paths, conn)
+    rounds: list[dict[str, object]] = []
+    db_summary: dict[str, object] | None = None
+    session_summary: dict[str, object] | None = None
+    index_summary: dict[str, int] | None = None
+    status_after: dict[str, object] | None = None
 
-    status_after = get_status(paths)
+    for round_number in range(1, max_rounds + 1):
+        round_started_at = time.monotonic()
+        db_summary = update_provider_assignments(paths, current_provider, current_model)
+        session_summary = sync_session_records(paths, current_provider, current_model)
+
+        with connect_db(paths.db_path, readonly=True) as conn:
+            index_summary = rebuild_session_index(paths, conn)
+
+        status_after = get_status(paths, expected_provider=expected_provider)
+        remaining_database = int(status_after.get("movable_database_threads") or 0)
+        remaining_session_entries = int(status_after.get("movable_session_meta_entries") or 0)
+        remaining_missing_index = int(status_after.get("missing_session_index_entries") or 0)
+        skipped_busy_files = int(session_summary.get("skipped_busy_session_files") or 0)
+        remaining_total = remaining_database + remaining_session_entries + remaining_missing_index
+        rounds.append(
+            {
+                "round": round_number,
+                "updated_rows": db_summary["updated_rows"],
+                "updated_session_files": session_summary["updated_session_files"],
+                "updated_session_meta_entries": session_summary["updated_session_meta_entries"],
+                "skipped_busy_session_files": skipped_busy_files,
+                "rewritten_index_entries": index_summary["rewritten_index_entries"],
+                "remaining_database_threads": remaining_database,
+                "remaining_session_meta_entries": remaining_session_entries,
+                "remaining_missing_session_index_entries": remaining_missing_index,
+                "duration_ms": elapsed_ms(round_started_at),
+            }
+        )
+        if remaining_total <= 0 and skipped_busy_files <= 0:
+            break
+        if skipped_busy_files > 0 and round_number >= max_rounds:
+            break
+
+    if db_summary is None or session_summary is None or index_summary is None or status_after is None:
+        raise RuntimeError("Sync did not run any repair round.")
+
     return {
         "action": "sync",
         "current_provider": current_provider,
         "current_model": current_model,
+        "sync_rounds": len(rounds),
+        "rounds": rounds,
         "synced_fields": db_summary["synced_fields"],
         "updated_rows": db_summary["updated_rows"],
         "visibility_updates": db_summary["visibility_updates"],
@@ -2099,12 +2160,23 @@ def restore_backup(paths: Paths, backup_path: str | None) -> dict[str, object]:
     with connect_db(paths.db_path, readonly=True) as conn:
         index_summary = rebuild_session_index(paths, conn)
 
-    status_after = get_status(paths)
+    sync_after_restore: dict[str, object] | None = None
+    try:
+        sync_after_restore = sync_to_current_provider(paths, create_backup=False)
+        status_after = sync_after_restore["status"]
+    except RuntimeError as exc:
+        status_after = get_status(paths)
+        sync_after_restore = {
+            "ok": False,
+            "error": str(exc),
+            "status": status_after,
+        }
     return {
         "action": "restore",
         "restored_from": str(chosen_backup),
         "safety_backup": str(restore_snapshot),
         "metadata_restore": restore_summary,
+        "sync_after_restore": sync_after_restore,
         "checkpoint": restore_db_summary["checkpoint"],
         "lock_wait_ms": restore_db_summary["lock_wait_ms"],
         "lock_attempts": restore_db_summary["attempts"],
@@ -2172,6 +2244,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Codex history sync helper")
     parser.add_argument("--codex-home", help="Override Codex home directory")
     parser.add_argument("--json", action="store_true", help="Emit JSON output")
+    parser.add_argument("--expected-provider", help="Require status/sync to target this configured provider")
     parser.add_argument("--one-click-safe-sync", action="store_true", help="Run launcher-compatible one-click safe backup and repair")
     parser.add_argument("--mode", choices=ONE_CLICK_MODES, default="auto", help="One-click mode")
     parser.add_argument("--close-codex", action="store_true", help="Close Codex Desktop before one-click repair")
@@ -2229,9 +2302,9 @@ def main() -> int:
 
     try:
         if args.command == "status":
-            payload = get_status(paths)
+            payload = get_status(paths, expected_provider=args.expected_provider)
         elif args.command == "sync":
-            payload = sync_to_current_provider(paths)
+            payload = sync_to_current_provider(paths, expected_provider=args.expected_provider)
         elif args.command == "restore":
             payload = restore_backup(paths, args.backup)
         elif args.command == "backup":
