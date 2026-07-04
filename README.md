@@ -18,6 +18,73 @@ provider configurations.
 The tool works only on local Codex Desktop data. It does not upload chat
 history, credentials, tokens, API keys, or provider databases.
 
+## Languages / 语言
+
+This README uses English as the primary public documentation language.
+
+中文快速说明：本工具用于修复 Windows 版 Codex Desktop 的本地聊天可见性、provider/model metadata、侧栏索引、归档索引和项目列表。它只处理本机 Codex 数据，不上传聊天记录，不迁移 `auth.json`、token、API key、OAuth refresh token 或第三方 key 管理器数据库。
+
+## Relationship With Codex Windows Launcher / 与启动器的关系
+
+This project is the history repair companion for
+[`codex-windows-launcher`](https://github.com/aizijigao-sketch/codex-windows-launcher).
+
+Recommended source layout on the maintainer machine:
+
+```text
+F:\AI-Workspace\20_Projects\codex-windows-launcher
+F:\AI-Workspace\20_Projects\codex-history-sync-windows-work
+```
+
+Responsibility split:
+
+- Codex Windows Launcher starts/stops Codex Desktop and CCSwitch, switches local
+  launcher profiles, and chooses the expected provider for each menu mode.
+- Codex History Sync Tool repairs local history visibility, provider/model
+  metadata, `session_index.jsonl`, archived-session index state, and sidebar
+  project roots.
+- Launcher menu `1` expects provider `openai`; launcher menu `2` expects
+  provider `custom`.
+- The launcher can call this backend before starting Codex:
+
+```powershell
+py -3 .\sync_backend.py --json --expected-provider custom sync
+```
+
+If this tool is not installed or not discoverable, the launcher can still switch
+profiles and start Codex, but it cannot repair local history visibility.
+
+## Required Software And Configuration
+
+For normal users:
+
+- Windows 10/11.
+- Codex Desktop.
+- The latest installer from this repository's GitHub Releases.
+- CCSwitch only when using third-party/custom provider routing.
+
+For source usage or development:
+
+- Python 3.
+- PowerShell.
+- PyInstaller for packaged builds.
+- Inno Setup 6 for Windows installer builds.
+
+Configuration ownership:
+
+- Configure official ChatGPT/OpenAI login inside Codex Desktop and your browser.
+- Configure third-party provider, model mapping, Base URL, and API key inside
+  CCSwitch or your provider tool.
+- Use Codex Windows Launcher for mode switching and launch order.
+- Use this tool for local history visibility repair and project-list repair.
+
+Do not configure or copy:
+
+- Do not copy `auth.json`, `.codex`, `.cc-switch`, OAuth tokens, API keys,
+  refresh tokens, or provider databases between computers.
+- Do not publish real `state_5.sqlite`, `session_index.jsonl`, `sessions`,
+  backup directories, screenshots, logs, or private investigation notes.
+
 ## What It Does
 
 - Shows the current Codex provider, model, thread counts, and project state.
