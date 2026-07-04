@@ -309,9 +309,15 @@ def assert_release_metadata() -> None:
         )
 
     readme = (ROOT / "README.md").read_text(encoding="utf-8-sig")
-    if f"Current source version: `{EXPECTED_TOOL_VERSION}`" not in readme:
+    if (
+        f"Current source version: `{EXPECTED_TOOL_VERSION}`" not in readme
+        and f"当前源码版本：`{EXPECTED_TOOL_VERSION}`" not in readme
+    ):
         raise AssertionError("README does not document the current source version")
-    if f"Latest Windows installer release: `v{EXPECTED_TOOL_VERSION}`" not in readme:
+    if (
+        f"Latest Windows installer release: `v{EXPECTED_TOOL_VERSION}`" not in readme
+        and f"最新 Windows 安装包：`v{EXPECTED_TOOL_VERSION}`" not in readme
+    ):
         raise AssertionError("README does not document the latest installer release")
     if readme.count("?") > 10 or "????" in readme:
         raise AssertionError("README appears to contain replacement-question-mark mojibake")
